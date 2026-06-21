@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+*.egg
+
+# Jittor / Training outputs
+logs/
+checkpoints/
+assets/test_predictions/
+*.pt
+*.pth
+*.pkl
+*.npy
+
+# VSCode
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.log
+
+# others
+/docs
+/Data_all
+/runs
