@@ -1,7 +1,7 @@
-import torch
-import torch.nn as nn
+import jittor as jt
+import jittor.nn as nn
 from .common import LayerNorm2d
-import torch.nn.functional as F
+from jittor.einops import rearrange
 import os
 os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
 
@@ -14,12 +14,12 @@ def conv3x3(in_planes, out_planes, stride=1, has_bias=False):
 def conv3x3_bn_relu(in_planes, out_planes, stride=1):
     return nn.Sequential(
         conv3x3(in_planes, out_planes, stride),
-        nn.BatchNorm2d(out_planes),
-        nn.ReLU(inplace=True),
+        nn.BatchNorm(out_planes),
+        nn.ReLU(),
     )
 
 def conv1x1(in_planes, out_planes, stride=1, has_bias=False):
-    "3x3 convolution with padding"
+    "1x1 convolution with padding"
     return nn.Conv2d(in_planes, out_planes, kernel_size=1, stride=stride,
                      padding=0, bias=has_bias)
 
@@ -27,108 +27,104 @@ def conv1x1(in_planes, out_planes, stride=1, has_bias=False):
 def conv1x1_bn_relu(in_planes, out_planes, stride=1):
     return nn.Sequential(
         conv1x1(in_planes, out_planes, stride),
-        nn.BatchNorm2d(out_planes),
-        nn.ReLU(inplace=True),
+        nn.BatchNorm(out_planes),
+        nn.ReLU(),
     )
 
-from einops import rearrange
 
-
-def custom_complex_normalization(input_tensor, dim=-1):
-    real_part = input_tensor.real
-    imag_part = input_tensor.imag
-    norm_real = F.softmax(real_part, dim=dim)
-    norm_imag = F.softmax(imag_part, dim=dim)
-
-    normalized_tensor = torch.complex(norm_real, norm_imag)
-
-    return normalized_tensor
+def custom_complex_normalization(input_var_real:jt.Var, input_var_imag:jt.Var, dim=-1)-> nn.ComplexNumber:
+    # 传参改成虚部实部分开了，后续调用这个函数要注意
+    norm_real = nn.softmax(input_var_real, dim=dim)
+    norm_imag = nn.softmax(input_var_imag, dim=dim)
+    normalized_var = nn.ComplexNumber(norm_real, norm_imag)
+    return normalized_var
 
 class Attention_SD(nn.Module):
     def __init__(self, dim, num_heads=2):
         super(Attention_SD, self).__init__()
         self.num_heads = num_heads
 
-        self.qkv1conv_1 = conv1x1(dim,dim)
-        self.qkv1conv_3 = conv1x1(dim,dim)
-        self.qkv1conv_5 = conv1x1(dim,dim)
+        # rgb分支频域
+        self.qr = conv1x1(dim,dim)  
+        self.kr = conv1x1(dim,dim)
+        self.vr = conv1x1(dim,dim)
 
+        # depth分支空间
         self.qm = conv1x1(dim,dim)
         self.km = conv1x1(dim,dim)
         self.vm = conv1x1(dim,dim)
 
-        self.temperature = nn.Parameter(torch.ones(num_heads, 1, 1))
-        self.temperatured = nn.Parameter(torch.ones(num_heads, 1, 1))
+        self.temperature = jt.ones((num_heads, 1, 1))
+        self.temperatured = jt.ones((num_heads, 1, 1))
 
         self.project_out = conv3x3_bn_relu(dim * 4, dim)
-
-        self.project_outr = nn.Conv2d(dim * 2, dim, kernel_size=1)
 
         self.weight = nn.Sequential(
             nn.Conv2d(dim, dim // 16, 1, bias=True),
             nn.BatchNorm2d(dim // 16),
-            nn.ReLU(True),
+            nn.ReLU(),
             nn.Conv2d(dim // 16, dim, 1, bias=True),
             nn.Sigmoid())
+        self.project_outr = nn.Conv2d(dim * 2, dim, kernel_size=1)
+
         self.weightd = nn.Sequential(
             nn.Conv2d(dim, dim // 16, 1, bias=True),
             nn.BatchNorm2d(dim // 16),
-            nn.ReLU(True),
+            nn.ReLU(),
             nn.Conv2d(dim // 16, dim, 1, bias=True),
             nn.Sigmoid())
-
         self.project_outd = nn.Conv2d(dim * 2, dim, kernel_size=1)
 
 
     def forward(self, x,d):
 
         b, c, h, w = x.shape
-        q_s = self.qkv1conv_5(x)
-        k_s = self.qkv1conv_3(x)
-        v_s = self.qkv1conv_1(x)
-        q_s = torch.fft.fft2(q_s.float())
-        k_s = torch.fft.fft2(k_s.float())
-        v_s = torch.fft.fft2(v_s.float())
-        q_s = rearrange(q_s, 'b (head c) h w -> b head c (h w)', head=self.num_heads)
-        k_s = rearrange(k_s, 'b (head c) h w -> b head c (h w)', head=self.num_heads)
-        v_s = rearrange(v_s, 'b (head c) h w -> b head c (h w)', head=self.num_heads)
-        q_s = torch.nn.functional.normalize(q_s, dim=-1)
-        k_s = torch.nn.functional.normalize(k_s, dim=-1)
+        q_s = self.qr(x)
+        k_s = self.kr(x)
+        v_s = self.vr(x)
+        q_s = jt.fft2(q_s.float())
+        k_s = jt.fft2(k_s.float())
+        v_s = jt.fft2(v_s.float())
+        q_s = rearrange(q_s, 'b (head c) h w -> b head c (h w)')
+        k_s = rearrange(k_s, 'b (head c) h w -> b head c (h w)')
+        v_s = rearrange(v_s, 'b (head c) h w -> b head c (h w)')
+        q_s = jt.misc.normalize(q_s, dim=-1)
+        k_s = jt.misc.normalize(k_s, dim=-1)
         attn_s = (q_s @ k_s.transpose(-2, -1)) * self.temperature
         attn_s = custom_complex_normalization(attn_s, dim=-1)
-        outr0 =  torch.abs(torch.fft.ifft2( attn_s @ v_s))
-        attn_s = torch.abs(torch.fft.ifft2(attn_s))
+        outr0 =  jt.abs(jt.ifft2( attn_s @ v_s))
+        attn_s = jt.abs(jt.ifft2(attn_s))
 
 
         dq_s = self.qm(d)
         dk_s = self.km(d)
         dv_s = self.vm(d)
-        dq_s = rearrange(dq_s, 'b (head c) h w -> b head c (h w)', head=self.num_heads)
-        dk_s = rearrange(dk_s, 'b (head c) h w -> b head c (h w)', head=self.num_heads)
-        dv_s = rearrange(dv_s, 'b (head c) h w -> b head c (h w)', head=self.num_heads)
-        dq_s = torch.nn.functional.normalize(dq_s, dim=-1)
-        dk_s = torch.nn.functional.normalize(dk_s, dim=-1)
+        dq_s = rearrange(dq_s, 'b (head c) h w -> b head c (h w)')
+        dk_s = rearrange(dk_s, 'b (head c) h w -> b head c (h w)')
+        dv_s = rearrange(dv_s, 'b (head c) h w -> b head c (h w)')
+        dq_s = jt.misc.normalize(dq_s, dim=-1)
+        dk_s = jt.misc.normalize(dk_s, dim=-1)
         dattn_s = (dq_s @ dk_s.transpose(-2, -1)) * self.temperatured
-        dattn_s = torch.softmax(dattn_s, dim=-1)
+        dattn_s = nn.softmax(dattn_s, dim=-1)
         outd0 = dattn_s @ dv_s
-        dattn_s = torch.fft.fft2(dattn_s.float())
+        dattn_s = jt.fft.fft2(dattn_s.float())
 
-        outr = torch.abs(torch.fft.ifft2(dattn_s @ v_s))
+        outr = jt.abs(jt.fft.ifft2(dattn_s @ v_s))
         outd = attn_s @ dv_s
 
-        outd = rearrange(outd, 'b head c (h w) -> b (head c) h w', head=self.num_heads, h=h, w=w)
-        outr = rearrange(outr, 'b head c (h w) -> b (head c) h w', head=self.num_heads, h=h, w=w)
-        outd0 = rearrange(outd0, 'b head c (h w) -> b (head c) h w', head=self.num_heads, h=h, w=w)
-        outr0 = rearrange(outr0, 'b head c (h w) -> b (head c) h w', head=self.num_heads, h=h, w=w)
+        outd = rearrange(outd, 'b head c (h w) -> b (head c) h w')
+        outr = rearrange(outr, 'b head c (h w) -> b (head c) h w')
+        outd0 = rearrange(outd0, 'b head c (h w) -> b (head c) h w')
+        outr0 = rearrange(outr0, 'b head c (h w) -> b (head c) h w')
 
 
-        out_f_lr = torch.abs(torch.fft.ifft2(self.weight(torch.fft.fft2(x.float()).real) * torch.fft.fft2(x.float())))
-        outr = self.project_outr(torch.cat((outr, out_f_lr), 1))
+        out_f_lr = jt.abs(jt.fft.ifft2(self.weight(jt.fft.fft2(x.float()).real) * jt.fft.fft2(x.float())))
+        outr = self.project_outr(jt.cat((outr, out_f_lr), 1))
 
-        out_f_ld = torch.abs(torch.fft.ifft2(self.weightd(torch.fft.fft2(d.float()).real) * torch.fft.fft2(d.float())))
-        outd = self.project_outd(torch.cat((outd, out_f_ld), 1))
+        out_f_ld = jt.abs(jt.fft.ifft2(self.weightd(jt.fft.fft2(d.float()).real) * jt.fft.fft2(d.float())))
+        outd = self.project_outd(jt.cat((outd, out_f_ld), 1))
 
-        out = self.project_out(torch.cat((outr,outr0,outd,outd0), 1))
+        out = self.project_out(jt.cat((outr,outr0,outd,outd0), 1))
 
 
         return out
@@ -158,7 +154,7 @@ class MEF(nn.Module):
         )
     def forward(self, in1, in2=None):
         in2 = self.fm1(in2)
-        x = torch.cat((in1, in2), 1)
+        x = jt.cat((in1, in2), 1)
         out = self.fm(x)
         return out
 
@@ -213,11 +209,11 @@ class DWConv(nn.Module):
         self.dw4 = nn.Conv2d(self.dim, self.dim, kernel_size=1)
 
         self.conv_end = conv1x1_bn_relu(dim,dim)
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: jt.var) -> jt.var:
         x1 = self.dw1(x)
         x2 = self.dw2(x1) + x1
         x3 = self.dw3(x2) + x2
         x4 = self.dw4(x3) + x3
 
-        x = self.conv_end(torch.cat((x1,x2,x3,x4),1))
+        x = self.conv_end(jt.cat((x1,x2,x3,x4),1))
         return x
