@@ -113,6 +113,7 @@ def custom_complex_normalization(input_tensor, dim=-1):
 
 # 到这里为止
 
+# 对应论文 SFRM
 class Attention_SD(nn.Module):
     def __init__(self, dim, num_heads=2):
         super(Attention_SD, self).__init__()
