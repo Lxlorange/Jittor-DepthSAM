@@ -105,8 +105,8 @@ class PromptEncoder(nn.Module):
         if pad:
             padding_point = jt.zeros((points.shape[0], 1, 2))
             padding_label = -jt.ones((labels.shape[0], 1))
-            points = jt.cat([points, padding_point], dim=1)
-            labels = jt.cat([labels, padding_label], dim=1)
+            points = jt.concat([points, padding_point], dim=1)
+            labels = jt.concat([labels, padding_label], dim=1)
         point_embedding = self.pe_layer.forward_with_coords(points, self.input_image_size)
         point_embedding[labels == -1] = 0.0
         point_embedding[labels == -1] += self.not_a_point_embed.weight
@@ -211,7 +211,7 @@ class PositionEmbeddingRandom(nn.Module):
         coords = coords @ self.positional_encoding_gaussian_matrix
         coords = 2 * np.pi * coords
         # outputs d_1 x ... x d_n x C shape
-        return jt.cat([jt.sin(coords), jt.cos(coords)], dim=-1)
+        return jt.concat([jt.sin(coords), jt.cos(coords)], dim=-1)
 
     def execute(self, size: Tuple[int, int]) -> jt.Var:
         """Generate positional encoding for a grid of the specified size."""
@@ -232,4 +232,4 @@ class PositionEmbeddingRandom(nn.Module):
         coords = coords_input.clone()
         coords[:, :, 0] = coords[:, :, 0] / image_size[1]
         coords[:, :, 1] = coords[:, :, 1] / image_size[0]
-        return self._pe_encoding(coords.to(jt.float))  # B x N x C
+        return self._pe_encoding(coords.float32())  # B x N x C
