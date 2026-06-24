@@ -224,19 +224,12 @@ def test_mynet():
     dw_out = dw(jt.randn((2, 32, 16, 16)))
     check("DWConv", dw_out, (2, 32, 16, 16))
 
-    # 3) Attention_SD (需要 CUDA；若环境不支持则跳过并打印提示)
-    old_cuda = jt.flags.use_cuda
-    try:
-        jt.flags.use_cuda = 1
-        attn_sd = Attention_SD(dim=32, num_heads=2)
-        x_rgb = jt.randn((2, 32, 16, 16))
-        x_depth = jt.randn((2, 32, 16, 16))
-        attn_out = attn_sd(x_rgb, x_depth)
-        check("Attention_SD", attn_out, (2, 32, 16, 16))
-    except Exception as e:
-        print(f"Attention_SD test skipped (CUDA/ComplexNumber issue): {e}")
-    finally:
-        jt.flags.use_cuda = old_cuda
+    jt.flags.use_cuda = 1
+    attn_sd = Attention_SD(dim=32, num_heads=2)
+    x_rgb = jt.randn((2, 32, 16, 16))
+    x_depth = jt.randn((2, 32, 16, 16))
+    attn_out = attn_sd(x_rgb, x_depth)
+    check("Attention_SD", attn_out, (2, 32, 16, 16))
 
     # 4) FM
     fm = FM(dim=64, oup=32)
