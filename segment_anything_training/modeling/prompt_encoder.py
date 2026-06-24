@@ -8,7 +8,7 @@ import jittor as jt
 import jittor.nn as nn
 import numpy as np
 from typing import Any, Optional, Tuple, Type
-from common import LayerNorm2d
+from segment_anything_training.modeling.common import LayerNorm2d
 
 
 class PromptEncoder(nn.Module):

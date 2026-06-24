@@ -1,6 +1,6 @@
 import jittor as jt
 import jittor.nn as nn
-from common import LayerNorm2d
+from segment_anything_training.modeling.common import LayerNorm2d
 import os
 os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
 

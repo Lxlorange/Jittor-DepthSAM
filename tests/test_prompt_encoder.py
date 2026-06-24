@@ -1,4 +1,4 @@
-from prompt_encoder import *
+from segment_anything_training.modeling.prompt_encoder import *
 
 jt.flags.use_cuda = 1
 

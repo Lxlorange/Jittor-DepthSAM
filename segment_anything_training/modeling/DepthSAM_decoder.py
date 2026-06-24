@@ -7,7 +7,7 @@
 import jittor as jt
 import jittor.nn as nn
 from typing import List, Tuple, Type
-from common import LayerNorm2d
+from segment_anything_training.modeling.common import LayerNorm2d
 
 
 class MaskDecoder(nn.Module):
