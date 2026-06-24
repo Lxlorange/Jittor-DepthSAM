@@ -6,20 +6,22 @@
 
 import jittor as jt
 import jittor.nn as nn
+
 from typing import List, Tuple, Type
+from .DepthSAM_decoder import MLP
 from .common import LayerNorm2d
 
 
 class MaskDecoder(nn.Module):
     def __init__(
-            self,
-            *,
-            transformer_dim: int,
-            transformer: nn.Module,
-            num_multimask_outputs: int = 3,
-            activation: Type[nn.Module] = nn.GELU,
-            iou_head_depth: int = 3,
-            iou_head_hidden_dim: int = 256,
+        self,
+        *,
+        transformer_dim: int,
+        transformer: nn.Module,
+        num_multimask_outputs: int = 3,
+        activation: Type[nn.Module] = nn.GELU,
+        iou_head_depth: int = 3,
+        iou_head_hidden_dim: int = 256,
     ) -> None:
         """
         Predicts masks given an image and prompt embeddings, using a
@@ -45,9 +47,10 @@ class MaskDecoder(nn.Module):
 
         self.iou_token = nn.Embedding(1, transformer_dim)
         self.num_mask_tokens = num_multimask_outputs + 1
-        self.mask_tokens1 = nn.Embedding(self.num_mask_tokens, transformer_dim)
+        self.mask_tokens = nn.Embedding(self.num_mask_tokens, transformer_dim)
+
         self.output_upscaling = nn.Sequential(
-            nn.ConvTranspose2d(transformer_dim, transformer_dim // 4, kernel_size=1, stride=1),
+            nn.ConvTranspose2d(transformer_dim, transformer_dim // 4, kernel_size=2, stride=2),
             LayerNorm2d(transformer_dim // 4),
             activation(),
             nn.ConvTranspose2d(transformer_dim // 4, transformer_dim // 8, kernel_size=2, stride=2),
@@ -60,21 +63,19 @@ class MaskDecoder(nn.Module):
             ]
         )
 
-        # self.iou_prediction_head = MLP(
-        #     transformer_dim, iou_head_hidden_dim, self.num_mask_tokens, iou_head_depth
-        # )
-
-
-        self.sigmoid = nn.Sigmoid()
+        self.iou_prediction_head = MLP(
+            transformer_dim, iou_head_hidden_dim, self.num_mask_tokens, iou_head_depth
+        )
 
     def execute(
-            self,
-            image_embeddings: jt.Var,
-            image_pe: jt.Var,
-            sparse_prompt_embeddings: jt.Var,
-            dense_prompt_embeddings: jt.Var,
-            multimask_output: bool = False,
-    ) -> Tuple[jt.Var, jt.Var, jt.Var]:
+        self,
+        image_embeddings: jt.Var,
+        # patch_embeddings: jt.Var,
+        image_pe: jt.Var,
+        sparse_prompt_embeddings: jt.Var,
+        dense_prompt_embeddings: jt.Var,
+        multimask_output: bool = None,
+    ) -> Tuple[jt.Var, jt.Var]:
         """
         Predict masks given image and prompt embeddings.
 
@@ -90,9 +91,9 @@ class MaskDecoder(nn.Module):
           jt.Var: batched predicted masks
           jt.Var: batched predictions of mask quality
         """
-
         masks, iou_pred = self.predict_masks(
             image_embeddings=image_embeddings,
+            # patch_embeddings=patch_embeddings,
             image_pe=image_pe,
             sparse_prompt_embeddings=sparse_prompt_embeddings,
             dense_prompt_embeddings=dense_prompt_embeddings,
@@ -110,15 +111,16 @@ class MaskDecoder(nn.Module):
         return masks, iou_pred
 
     def predict_masks(
-            self,
-            image_embeddings: jt.Var,
-            image_pe: jt.Var,
-            sparse_prompt_embeddings: jt.Var,
-            dense_prompt_embeddings: jt.Var,
-    ) -> Tuple[jt.Var, jt.Var, jt.Var]:
+        self,
+        image_embeddings: jt.Var,
+        # patch_embeddings: jt.Var,
+        image_pe: jt.Var,
+        sparse_prompt_embeddings: jt.Var,
+        dense_prompt_embeddings: jt.Var,
+    ) -> Tuple[jt.Var, jt.Var]:
         """Predicts masks. See 'execute' for more details."""
         # Concatenate output tokens
-        output_tokens = jt.concat([self.iou_token.weight, self.mask_tokens1.weight], dim=0)
+        output_tokens = jt.concat([self.iou_token.weight, self.mask_tokens.weight], dim=0)
         output_tokens = output_tokens.unsqueeze(0).expand(sparse_prompt_embeddings.size(0), -1, -1)
         tokens = jt.concat((output_tokens, sparse_prompt_embeddings), dim=1)
 
@@ -144,33 +146,7 @@ class MaskDecoder(nn.Module):
         masks = (hyper_in @ upscaled_embedding.view(b, c, h * w)).view(b, -1, h, w)
 
         # Generate mask quality predictions
-        # iou_pred = self.iou_prediction_head(iou_token_out)
+        iou_pred = self.iou_prediction_head(iou_token_out)
 
-        return masks, masks
+        return masks, iou_pred
 
-
-# Lightly adapted from
-# https://github.com/facebookresearch/MaskFormer/blob/main/mask_former/modeling/transformer/transformer_predictor.py # noqa
-class MLP(nn.Module):
-    def __init__(
-            self,
-            input_dim: int,
-            hidden_dim: int,
-            output_dim: int,
-            num_layers: int,
-            sigmoid_output: bool = False,
-    ) -> None:
-        super().__init__()
-        self.num_layers = num_layers
-        h = [hidden_dim] * (num_layers - 1)
-        self.layers = nn.ModuleList([
-            nn.Linear(n, k) for n, k in zip([input_dim] + h, h + [output_dim])
-        ])
-        self.sigmoid_output = sigmoid_output
-
-    def execute(self, x):
-        for i, layer in enumerate(self.layers):
-            x = nn.relu(layer(x)) if i < self.num_layers - 1 else layer(x)
-        if self.sigmoid_output:
-            x = nn.Sigmoid(x)
-        return x
