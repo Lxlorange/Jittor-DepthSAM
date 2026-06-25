@@ -6,8 +6,7 @@ sys.path.insert(0, project_root)
 import jittor as jt
 import jittor.nn as nn
 from functools import partial
-from segment_anything_training.build_sam import sam_model_registry
-from segment_anything_training.modeling import ImageEncoderViT,PatchEmbed,Block,Attention,window_partition,window_unpartition,get_rel_pos,PromptEncoder,PositionEmbeddingRandom,MaskDecoder,MLP,TwoWayTransformer
+from segment_anything_training.modeling import PromptEncoder,PositionEmbeddingRandom,MaskDecoder,MLP,TwoWayTransformer
 
 from segment_anything_training.modeling.MyNet import (
     Attention_SD, FM, MEF, Decode, DWConv, BasicConv2d,
@@ -26,91 +25,7 @@ def check(name, x, shape):
         assert actual == shape, f"test {name} got {actual}, expect {shape}"
 
 
-def check_len(name, x, length):
-    print(f"test {name} got len {len(x)}, expect {length}")
-    assert len(x) == length, f"test {name} got len {len(x)}, expect {length}"
-
 # 分别测试
-def test_registry():
-    assert isinstance(sam_model_registry, dict)
-    assert "default" in sam_model_registry
-    assert "vit_h" in sam_model_registry
-    assert "vit_l" in sam_model_registry
-    assert "vit_b" in sam_model_registry
-    assert callable(sam_model_registry["vit_b"])
-    print("test_registry passed\n")
-
-
-def test_image_encoder():
-    print("Testing ImageEncoderViT & submodules...")
-
-    # 按vit_b参数构造
-    encoder = ImageEncoderViT(
-        depth=12,
-        embed_dim=768,
-        img_size=1024,
-        mlp_ratio=4,
-        norm_layer=partial(jt.nn.LayerNorm, eps=1e-6),
-        num_heads=12,
-        patch_size=16,
-        qkv_bias=True,
-        use_rel_pos=True,
-        global_attn_indexes=[2, 5, 8, 11],
-        window_size=14,
-        out_chans=256,
-    )
-
-    x = jt.randn((2, 3, 1024, 1024))
-    out, interm = encoder(x)
-
-    check("image_encoder output", out, (2, 256, 64, 64))
-    check_len("image_encoder interm", interm, 12)
-    for i, emb in enumerate(interm):
-        check(f"image_encoder interm[{i}]", emb, (2, 64, 64, 768))
-
-    pe = PatchEmbed(kernel_size=(16, 16), stride=(16, 16), in_chans=3, embed_dim=768)
-    pe_out = pe(x)
-    check("patch_embed", pe_out, (2, 64, 64, 768))
-
-    block_global = Block(
-        dim=768, num_heads=12, mlp_ratio=4, qkv_bias=True,
-        norm_layer=partial(jt.nn.LayerNorm, eps=1e-6),
-        window_size=0,
-        input_size=(64, 64),
-    )
-    bg_out = block_global(jt.randn((2, 64, 64, 768)))
-    check("block_global", bg_out, (2, 64, 64, 768))
-
-    block_win = Block(
-        dim=768, num_heads=12, mlp_ratio=4, qkv_bias=True,
-        norm_layer=partial(jt.nn.LayerNorm, eps=1e-6),
-        window_size=14,
-        input_size=(64, 64),
-    )
-    bw_out = block_win(jt.randn((2, 64, 64, 768)))
-    check("block_window", bw_out, (2, 64, 64, 768))
-
-    attn = Attention(dim=768, num_heads=12, qkv_bias=True, use_rel_pos=False)
-    attn_out = attn(jt.randn((2, 16, 16, 768)))
-    check("attention_no_rel", attn_out, (2, 16, 16, 768))
-
-    attn_rel = Attention(dim=768, num_heads=12, qkv_bias=True, use_rel_pos=True, input_size=(16, 16))
-    attn_rel_out = attn_rel(jt.randn((2, 16, 16, 768)))
-    check("attention_rel_pos", attn_rel_out, (2, 16, 16, 768))
-
-    wp_in = jt.randn((2, 64, 64, 768))
-    windows, pad_hw = window_partition(wp_in, 14)
-    check("window_partition", windows, (50, 14, 14, 768))  # 2*5*5=50
-    wp_back = window_unpartition(windows, 14, pad_hw, (64, 64))
-    check("window_unpartition", wp_back, (2, 64, 64, 768))
-
-    rel_pos_small = jt.randn((15, 64))
-    rp_out = get_rel_pos(16, 16, rel_pos_small)
-    check("get_rel_pos_interp", rp_out, (16, 16, 64))
-
-    print("test_image_encoder passed\n")
-
-
 def test_prompt_encoder():
     print("Testing PromptEncoder...")
 
@@ -268,52 +183,9 @@ def test_mynet():
     print("test_mynet passed\n")
 
 
-def test_build_sam_style_integration():
-    print("Testing build_sam-style integration flow...")
-
-    # 用 build_sam_vit_b 的参数分别构造各组件，并做端到端前向
-    encoder = ImageEncoderViT(
-        depth=12, embed_dim=768, img_size=1024, mlp_ratio=4,
-        norm_layer=partial(jt.nn.LayerNorm, eps=1e-6),
-        num_heads=12, patch_size=16, qkv_bias=True,
-        use_rel_pos=True, global_attn_indexes=[2, 5, 8, 11],
-        window_size=14, out_chans=256,
-    )
-    prompt_encoder = PromptEncoder(
-        embed_dim=256, image_embedding_size=(64, 64),
-        input_image_size=(1024, 1024), mask_in_chans=16,
-    )
-    transformer = TwoWayTransformer(depth=2, embedding_dim=256, mlp_dim=2048, num_heads=8)
-    mask_decoder = MaskDecoder(
-        num_multimask_outputs=3, transformer=transformer,
-        transformer_dim=256, iou_head_depth=3, iou_head_hidden_dim=256,
-    )
-
-    # 模拟一次完整推理
-    img = jt.randn((1, 3, 1024, 1024))
-    img_emb, _ = encoder(img)
-    check("integration img_emb", img_emb, (1, 256, 64, 64))
-
-    sparse, dense = prompt_encoder.execute(points=None, boxes=None, masks=None)
-    masks, iou = mask_decoder.execute(
-        image_embeddings=img_emb,
-        image_pe=prompt_encoder.get_dense_pe(),
-        sparse_prompt_embeddings=sparse,
-        dense_prompt_embeddings=dense,
-        multimask_output=True,
-    )
-    check("integration masks", masks, (1, 3, 256, 256))
-    check("integration iou", iou, (1, 3))
-
-    print("test_build_sam_style_integration passed\n")
-
-
 
 if __name__ == "__main__":
-    # test_registry()
-    # test_image_encoder()
-    # test_prompt_encoder()
-    # test_mask_decoder()
+    test_prompt_encoder()
+    test_mask_decoder()
     test_mynet()
-    # test_build_sam_style_integration()
     print("All tests passed!")

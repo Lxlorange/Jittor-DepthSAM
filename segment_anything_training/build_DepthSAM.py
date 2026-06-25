@@ -2,8 +2,8 @@ import jittor as jt
 import jittor.nn as nn
 from functools import partial
 from .modeling import PromptEncoder, TwoWayTransformer
-from .modeling.DepthSAM_decoder import MaskDecoder as EdgeDecoder
-from .modeling.DepthSAM_edge import Sam as EdgeDepthSAM
+from .modeling import MaskDecoder as EdgeDecoder
+from .modeling import EdgeDepthSAM
 from depth_anything_v2.dpt import DepthAnythingV2
 
 model_configs = {
