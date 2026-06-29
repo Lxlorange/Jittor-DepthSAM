@@ -6,8 +6,7 @@
 
 from typing import Callable, Optional
 
-from jt import Tensor, nn
-import jt.nn.functional as F
+from jittor import Var, nn
 
 
 class SwiGLUFFN(nn.Module):
@@ -26,16 +25,15 @@ class SwiGLUFFN(nn.Module):
         self.w12 = nn.Linear(in_features, 2 * hidden_features, bias=bias)
         self.w3 = nn.Linear(hidden_features, out_features, bias=bias)
 
-    def forward(self, x: Tensor) -> Tensor:
+    def execute(self, x: Var) -> Var:
         x12 = self.w12(x)
         x1, x2 = x12.chunk(2, dim=-1)
-        hidden = F.silu(x1) * x2
+        hidden = nn.silu(x1) * x2
         return self.w3(hidden)
 
 
 try:
     from xformers.ops import SwiGLU
-
     XFORMERS_AVAILABLE = True
 except ImportError:
     SwiGLU = SwiGLUFFN

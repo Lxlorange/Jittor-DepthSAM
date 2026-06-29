@@ -6,13 +6,13 @@
 
 # References:
 #   https://github.com/facebookresearch/dino/blob/master/vision_transformer.py
-#   https://github.com/rwightman/pyjt-image-models/tree/master/timm/layers/patch_embed.py
+#   https://github.com/rwightman/pytorch-image-models/tree/master/timm/layers/patch_embed.py
 
 import logging
 from typing import Callable, List, Any, Tuple, Dict
 
 import jittor as jt
-from jt import nn, Var
+from jittor import nn, Var
 
 from .attention import Attention, MemEffAttention
 from .drop_path import DropPath
@@ -79,7 +79,7 @@ class Block(nn.Module):
 
         self.sample_drop_ratio = drop_path
 
-    def forward(self, x: Var) -> Var:
+    def execute(self, x: Var) -> Var:
         def attn_residual_func(x: Var) -> Var:
             return self.ls1(self.attn(self.norm1(x)))
 
@@ -242,9 +242,9 @@ class NestedVarBlock(Block):
             x = x + ffn_residual_func(x)
             return attn_bias.split(x)
 
-    def forward(self, x_or_x_list):
+    def execute(self, x_or_x_list):
         if isinstance(x_or_x_list, Var):
-            return super().forward(x_or_x_list)
+            return super().execute(x_or_x_list)
         elif isinstance(x_or_x_list, list):
             assert XFORMERS_AVAILABLE, "Please install xFormers for nested Vars usage"
             return self.forward_nested(x_or_x_list)

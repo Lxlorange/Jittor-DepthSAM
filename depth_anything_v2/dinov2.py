@@ -14,10 +14,8 @@ from typing import Sequence, Tuple, Union, Callable
 
 import jittor as jt
 import jittor.nn as nn
-import jittor.utils.checkpoint
-from jittor.nn.init import trunc_normal_
-
-from .dinov2_layers import Mlp, PatchEmbed, SwiGLUFFNFused, MemEffAttention, NestedTensorBlock as Block
+from jittor.init import trunc_normal_
+from .dinov2_layers import Mlp, PatchEmbed, SwiGLUFFNFused, MemEffAttention, NestedVarBlock
 
 
 logger = logging.getLogger("dinov2")
@@ -35,7 +33,7 @@ def named_apply(fn: Callable, module: nn.Module, name="", depth_first=True, incl
 
 
 class BlockChunk(nn.ModuleList):
-    def forward(self, x):
+    def execute(self, x):
         for b in self:
             x = b(x)
         return x
@@ -59,7 +57,7 @@ class DinoVisionTransformer(nn.Module):
         init_values=None,  # for layerscale: None or 0 => no layerscale
         embed_layer=PatchEmbed,
         act_layer=nn.GELU,
-        block_fn=Block,
+        block_fn=NestedVarBlock,
         ffn_layer="mlp",
         block_chunks=1,
         num_register_tokens=0,
@@ -171,9 +169,9 @@ class DinoVisionTransformer(nn.Module):
 
     def init_weights(self):
         trunc_normal_(self.pos_embed, std=0.02)
-        nn.init.normal_(self.cls_token, std=1e-6)
+        jt.init.gauss_(self.cls_token, mean=0.0, std=1e-6)
         if self.register_tokens is not None:
-            nn.init.normal_(self.register_tokens, std=1e-6)
+            jt.init.gauss_(self.register_tokens, mean=0.0, std=1e-6)
         named_apply(init_weights_vit_timm, self)
 
     def interpolate_pos_encoding(self, x, w, h):
@@ -296,12 +294,12 @@ class DinoVisionTransformer(nn.Module):
 
     def get_intermediate_layers(
         self,
-        x: jt.Tensor,
+        x: jt.Var,
         n: Union[int, Sequence] = 1,  # Layers or n last layers to take
         reshape: bool = False,
         return_class_token: bool = False,
         norm=True
-    ) -> Tuple[Union[jt.Tensor, Tuple[jt.Tensor]]]:
+    ) -> Tuple[Union[jt.Var, Tuple[jt.Var]]]:
         if self.chunked_blocks:
             outputs = self._get_intermediate_layers_chunked(x, n)
         else:
@@ -320,7 +318,7 @@ class DinoVisionTransformer(nn.Module):
             return tuple(zip(outputs, class_tokens))
         return tuple(outputs)
 
-    def forward(self, *args, is_training=False, **kwargs):
+    def execute(self, *args, is_training=False, **kwargs):
         ret = self.forward_features(*args, **kwargs)
         if is_training:
             return ret
@@ -333,7 +331,7 @@ def init_weights_vit_timm(module: nn.Module, name: str = ""):
     if isinstance(module, nn.Linear):
         trunc_normal_(module.weight, std=0.02)
         if module.bias is not None:
-            nn.init.zeros_(module.bias)
+            jt.init.constant_(module.bias, 0)
 
 
 def vit_small(patch_size=16, num_register_tokens=0, **kwargs):
@@ -343,7 +341,7 @@ def vit_small(patch_size=16, num_register_tokens=0, **kwargs):
         depth=12,
         num_heads=6,
         mlp_ratio=4,
-        block_fn=partial(Block, attn_class=MemEffAttention),
+        block_fn=partial(NestedVarBlock, attn_class=MemEffAttention),
         num_register_tokens=num_register_tokens,
         **kwargs,
     )
@@ -357,7 +355,7 @@ def vit_base(patch_size=16, num_register_tokens=0, **kwargs):
         depth=12,
         num_heads=12,
         mlp_ratio=4,
-        block_fn=partial(Block, attn_class=MemEffAttention),
+        block_fn=partial(NestedVarBlock, attn_class=MemEffAttention),
         num_register_tokens=num_register_tokens,
         **kwargs,
     )
@@ -371,7 +369,7 @@ def vit_large(patch_size=16, num_register_tokens=0, **kwargs):
         depth=24,
         num_heads=16,
         mlp_ratio=4,
-        block_fn=partial(Block, attn_class=MemEffAttention),
+        block_fn=partial(NestedVarBlock, attn_class=MemEffAttention),
         num_register_tokens=num_register_tokens,
         **kwargs,
     )
@@ -388,7 +386,7 @@ def vit_giant2(patch_size=16, num_register_tokens=0, **kwargs):
         depth=40,
         num_heads=24,
         mlp_ratio=4,
-        block_fn=partial(Block, attn_class=MemEffAttention),
+        block_fn=partial(NestedVarBlock, attn_class=MemEffAttention),
         num_register_tokens=num_register_tokens,
         **kwargs,
     )

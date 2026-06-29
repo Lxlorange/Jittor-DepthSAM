@@ -1,10 +1,11 @@
 import cv2
 import jittor as jt
 import jittor.nn as nn
+from jittor.transform import Compose
 
-from depth_anything_v2.dinov2 import DINOv2
-from depth_anything_v2.util.blocks import FeatureFusionBlock, _make_scratch
-from depth_anything_v2.util.transform import Resize, NormalizeImage, PrepareForNet
+from .dinov2 import DINOv2
+from .util.blocks import FeatureFusionBlock, _make_scratch
+from .util.transform import Resize, NormalizeImage, PrepareForNet
 
 
 def _make_fusion_block(features, use_bn, size=None):
@@ -227,4 +228,3 @@ if __name__=="__main__":
 
     model = DepthAnythingV2()
     print(model)
-    # aaa = model(a)

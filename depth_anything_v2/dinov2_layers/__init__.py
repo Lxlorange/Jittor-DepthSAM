@@ -7,5 +7,15 @@
 from .mlp import Mlp
 from .patch_embed import PatchEmbed
 from .swiglu_ffn import SwiGLUFFN, SwiGLUFFNFused
-from .block import NestedTensorBlock
+from .block import NestedVarBlock
 from .attention import MemEffAttention
+
+
+__all__ = [
+    "Mlp",
+    "PatchEmbed",
+    "SwiGLUFFN",
+    "SwiGLUFFNFused",
+    "NestedVarBlock",
+    "MemEffAttention",
+]

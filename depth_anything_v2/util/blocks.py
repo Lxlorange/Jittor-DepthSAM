@@ -1,4 +1,4 @@
-import jt.nn as nn
+import jittor.nn as nn
 
 
 def _make_scratch(in_shape, out_shape, groups=1, expand=False):
@@ -52,9 +52,7 @@ class ResidualConvUnit(nn.Module):
 
         self.activation = activation
 
-        self.skip_add = nn.quantized.FloatFunctional()
-
-    def forward(self, x):
+    def execute(self, x):
         """Forward pass.
 
         Args:
@@ -74,10 +72,10 @@ class ResidualConvUnit(nn.Module):
         if self.bn == True:
             out = self.bn2(out)
 
-        if self.groups > 1:
-            out = self.conv_merge(out)
+        # if self.groups > 1:
+        #     out = self.conv_merge(out)
 
-        return self.skip_add.add(out, x)
+        return out+x
 
 
 class FeatureFusionBlock(nn.Module):
@@ -114,13 +112,11 @@ class FeatureFusionBlock(nn.Module):
         self.out_conv = nn.Conv2d(features, out_features, kernel_size=1, stride=1, padding=0, bias=True, groups=1)
 
         self.resConfUnit1 = ResidualConvUnit(features, activation, bn)
-        self.resConfUnit2 = ResidualConvUnit(features, activation, bn)
-        
-        self.skip_add = nn.quantized.FloatFunctional()
+        self.resConfUnit2 = ResidualConvUnit(features, activation, bn)        
 
         self.size=size
 
-    def forward(self, *xs, size=None):
+    def execute(self, *xs, size=None):
         """Forward pass.
 
         Returns:
@@ -130,7 +126,7 @@ class FeatureFusionBlock(nn.Module):
 
         if len(xs) == 2:
             res = self.resConfUnit1(xs[1])
-            output = self.skip_add.add(output, res)
+            output += res
 
         output = self.resConfUnit2(output)
 
@@ -141,7 +137,7 @@ class FeatureFusionBlock(nn.Module):
         else:
             modifier = {"size": size}
 
-        output = nn.functional.interpolate(output, **modifier, mode="bilinear", align_corners=self.align_corners)
+        output = nn.interpolate(output, **modifier, mode="bilinear", align_corners=self.align_corners)
         
         output = self.out_conv(output)
 

@@ -6,12 +6,12 @@
 
 # References:
 #   https://github.com/facebookresearch/dino/blob/master/vision_transformer.py
-#   https://github.com/rwightman/pyjt-image-models/tree/master/timm/layers/patch_embed.py
+#   https://github.com/rwightman/pytorch-image-models/tree/master/timm/layers/patch_embed.py
 
 from typing import Callable, Optional, Tuple, Union
 
-from jt import Tensor
-import jt.nn as nn
+from jittor import Var
+import jittor.nn as nn
 
 
 def make_2tuple(x):
@@ -66,7 +66,7 @@ class PatchEmbed(nn.Module):
         self.proj = nn.Conv2d(in_chans, embed_dim, kernel_size=patch_HW, stride=patch_HW)
         self.norm = norm_layer(embed_dim) if norm_layer else nn.Identity()
 
-    def forward(self, x: Tensor) -> Tensor:
+    def execute(self, x: Var) -> Var:
         _, _, H, W = x.shape
         patch_H, patch_W = self.patch_size
 

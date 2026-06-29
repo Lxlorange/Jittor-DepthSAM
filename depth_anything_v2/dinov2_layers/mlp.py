@@ -6,12 +6,12 @@
 
 # References:
 #   https://github.com/facebookresearch/dino/blob/master/vision_transformer.py
-#   https://github.com/rwightman/pyjt-image-models/tree/master/timm/layers/mlp.py
+#   https://github.com/rwightman/pytorch-image-models/tree/master/timm/layers/mlp.py
 
 
 from typing import Callable, Optional
 
-from jt import Tensor, nn
+from jittor import Var, nn
 
 
 class Mlp(nn.Module):
@@ -32,7 +32,7 @@ class Mlp(nn.Module):
         self.fc2 = nn.Linear(hidden_features, out_features, bias=bias)
         self.drop = nn.Dropout(drop)
 
-    def forward(self, x: Tensor) -> Tensor:
+    def execute(self, x: Var) -> Var:
         x = self.fc1(x)
         x = self.act(x)
         x = self.drop(x)

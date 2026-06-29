@@ -6,7 +6,7 @@
 
 # References:
 #   https://github.com/facebookresearch/dino/blob/master/vision_transformer.py
-#   https://github.com/rwightman/pyjt-image-models/tree/master/timm/models/vision_transformer.py
+#   https://github.com/rwightman/pytorch-image-models/tree/master/timm/models/vision_transformer.py
 
 import logging
 
@@ -46,7 +46,7 @@ class Attention(nn.Module):
         self.proj = nn.Linear(dim, dim, bias=proj_bias)
         self.proj_drop = nn.Dropout(proj_drop)
 
-    def forward(self, x: Var) -> Var:
+    def execute(self, x: Var) -> Var:
         B, N, C = x.shape
         qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4)
 
@@ -63,10 +63,10 @@ class Attention(nn.Module):
 
 
 class MemEffAttention(Attention):
-    def forward(self, x: Var, attn_bias=None) -> Var:
+    def execute(self, x: Var, attn_bias=None) -> Var:
         if not XFORMERS_AVAILABLE:
             assert attn_bias is None, "xFormers is required for nested Vars usage"
-            return super().forward(x)
+            return super().execute(x)
 
         B, N, C = x.shape
         qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, C // self.num_heads)

@@ -6,10 +6,10 @@
 
 # References:
 #   https://github.com/facebookresearch/dino/blob/master/vision_transformer.py
-#   https://github.com/rwightman/pyjt-image-models/tree/master/timm/layers/drop.py
+#   https://github.com/rwightman/pytorch-image-models/tree/master/timm/layers/drop.py
 
 
-from jt import nn
+from jittor import nn
 
 
 def drop_path(x, drop_prob: float = 0.0, training: bool = False):
@@ -31,5 +31,5 @@ class DropPath(nn.Module):
         super(DropPath, self).__init__()
         self.drop_prob = drop_prob
 
-    def forward(self, x):
+    def execute(self, x):
         return drop_path(x, self.drop_prob, self.training)
