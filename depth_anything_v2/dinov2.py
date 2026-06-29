@@ -104,12 +104,10 @@ class DinoVisionTransformer(nn.Module):
         self.patch_embed = embed_layer(img_size=img_size, patch_size=patch_size, in_chans=in_chans, embed_dim=embed_dim)
         num_patches = self.patch_embed.num_patches
 
-        self.cls_token = nn.Parameter(jt.zeros(1, 1, embed_dim))
-        self.pos_embed = nn.Parameter(jt.zeros(1, num_patches + self.num_tokens, embed_dim))
+        self.cls_token = jt.zeros(1, 1, embed_dim)
+        self.pos_embed = jt.zeros(1, num_patches + self.num_tokens, embed_dim)
         assert num_register_tokens >= 0
-        self.register_tokens = (
-            nn.Parameter(jt.zeros(1, num_register_tokens, embed_dim)) if num_register_tokens else None
-        )
+        self.register_tokens = jt.zeros(1, num_register_tokens, embed_dim) if num_register_tokens else None
 
         if drop_path_uniform is True:
             dpr = [drop_path_rate] * depth
@@ -163,7 +161,7 @@ class DinoVisionTransformer(nn.Module):
         self.norm = norm_layer(embed_dim)
         self.head = nn.Identity()
 
-        self.mask_token = nn.Parameter(jt.zeros(1, embed_dim))
+        self.mask_token = jt.zeros(1, embed_dim)
 
         self.init_weights()
 
@@ -194,18 +192,17 @@ class DinoVisionTransformer(nn.Module):
         
         sqrt_N = math.sqrt(N)
         sx, sy = float(w0) / sqrt_N, float(h0) / sqrt_N
-        patch_pos_embed = nn.functional.interpolate(
+        patch_pos_embed = nn.interpolate(
             patch_pos_embed.reshape(1, int(sqrt_N), int(sqrt_N), dim).permute(0, 3, 1, 2),
             scale_factor=(sx, sy),
             # (int(w0), int(h0)), # to solve the upsampling shape issue
             mode="bicubic",
-            antialias=self.interpolate_antialias
         )
         
         assert int(w0) == patch_pos_embed.shape[-2]
         assert int(h0) == patch_pos_embed.shape[-1]
         patch_pos_embed = patch_pos_embed.permute(0, 2, 3, 1).view(1, -1, dim)
-        return jt.cat((class_pos_embed.unsqueeze(0), patch_pos_embed), dim=1).to(previous_dtype)
+        return jt.concat((class_pos_embed.unsqueeze(0), patch_pos_embed), dim=1).to(previous_dtype)
 
     def prepare_tokens_with_masks(self, x, masks=None):
         B, nc, w, h = x.shape
@@ -213,11 +210,11 @@ class DinoVisionTransformer(nn.Module):
         if masks is not None:
             x = jt.where(masks.unsqueeze(-1), self.mask_token.to(x.dtype).unsqueeze(0), x)
 
-        x = jt.cat((self.cls_token.expand(x.shape[0], -1, -1), x), dim=1)
+        x = jt.concat((self.cls_token.expand(x.shape[0], -1, -1), x), dim=1)
         x = x + self.interpolate_pos_encoding(x, w, h)
 
         if self.register_tokens is not None:
-            x = jt.cat(
+            x = jt.concat(
                 (
                     x[:, :1],
                     self.register_tokens.expand(x.shape[0], -1, -1),
@@ -311,7 +308,9 @@ class DinoVisionTransformer(nn.Module):
         if reshape:
             B, _, w, h = x.shape
             outputs = [
-                out.reshape(B, w // self.patch_size, h // self.patch_size, -1).permute(0, 3, 1, 2).contiguous()
+                jt.misc.contiguous(
+                    out.reshape(B, w // self.patch_size, h // self.patch_size, -1).permute(0, 3, 1, 2)
+                )
                 for out in outputs
             ]
         if return_class_token:

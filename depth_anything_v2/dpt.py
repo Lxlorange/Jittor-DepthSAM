@@ -120,7 +120,7 @@ class DPTHead(nn.Module):
             if self.use_clstoken:
                 x, cls_token = x[0], x[1]
                 readout = cls_token.unsqueeze(1).expand_as(x)
-                x = self.readout_projects[i](jt.cat((x, readout), -1))
+                x = self.readout_projects[i](jt.concat((x, readout), -1))
             else:
                 x = x[0]
             

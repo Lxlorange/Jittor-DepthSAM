@@ -22,7 +22,7 @@ class LayerScale(nn.Module):
     ) -> None:
         super().__init__()
         self.inplace = inplace
-        self.gamma = nn.Parameter(init_values * jt.ones(dim))
+        self.gamma = init_values * jt.ones(dim)
 
     def execute(self, x: Var) -> Var:
-        return x.mul_(self.gamma) if self.inplace else x * self.gamma
+        return x * self.gamma

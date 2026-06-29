@@ -173,7 +173,7 @@ def get_attn_bias_and_cat(x_list, branges=None):
         cat_Vars = index_select_cat([x.flatten(1) for x in x_list], branges).view(1, -1, x_list[0].shape[-1])
     else:
         Vars_bs1 = tuple(x.reshape([1, -1, *x.shape[2:]]) for x in x_list)
-        cat_Vars = jt.cat(Vars_bs1, dim=1)
+        cat_Vars = jt.concat(Vars_bs1, dim=1)
 
     return attn_bias_cache[all_shapes], cat_Vars
 
