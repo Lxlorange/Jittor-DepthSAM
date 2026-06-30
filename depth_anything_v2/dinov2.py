@@ -14,7 +14,6 @@ from typing import Sequence, Tuple, Union, Callable
 
 import jittor as jt
 import jittor.nn as nn
-from jittor.init import trunc_normal_
 from .dinov2_layers import Mlp, PatchEmbed, SwiGLUFFNFused, MemEffAttention, NestedVarBlock
 
 
@@ -24,9 +23,10 @@ logger = logging.getLogger("dinov2")
 def named_apply(fn: Callable, module: nn.Module, name="", depth_first=True, include_root=False) -> nn.Module:
     if not depth_first and include_root:
         fn(module=module, name=name)
-    for child_name, child_module in module.named_children():
-        child_name = ".".join((name, child_name)) if name else child_name
-        named_apply(fn=fn, module=child_module, name=child_name, depth_first=depth_first, include_root=True)
+    for child_name, child_module in module._modules.items():
+        if child_module is not None:
+            child_name = ".".join((name, child_name)) if name else child_name
+            named_apply(fn=fn, module=child_module, name=child_name, depth_first=depth_first, include_root=True)
     if depth_first and include_root:
         fn(module=module, name=name)
     return module
@@ -104,15 +104,15 @@ class DinoVisionTransformer(nn.Module):
         self.patch_embed = embed_layer(img_size=img_size, patch_size=patch_size, in_chans=in_chans, embed_dim=embed_dim)
         num_patches = self.patch_embed.num_patches
 
-        self.cls_token = jt.zeros(1, 1, embed_dim)
-        self.pos_embed = jt.zeros(1, num_patches + self.num_tokens, embed_dim)
+        self.cls_token = jt.randn((1, 1, embed_dim)) * 1e-6
+        self.pos_embed = jt.init.trunc_normal_(jt.zeros((1, num_patches + self.num_tokens, embed_dim)), std=0.02)
         assert num_register_tokens >= 0
-        self.register_tokens = jt.zeros(1, num_register_tokens, embed_dim) if num_register_tokens else None
+        self.register_tokens = jt.randn((1, num_register_tokens, embed_dim)) * 1e-6 if num_register_tokens else None
 
         if drop_path_uniform is True:
             dpr = [drop_path_rate] * depth
         else:
-            dpr = [x.item() for x in jt.linspace(0, drop_path_rate, depth)]  # stochastic depth decay rule
+            dpr = [drop_path_rate * i / max(depth - 1, 1) for i in range(depth)]
 
         if ffn_layer == "mlp":
             logger.info("using MLP layer as FFN")
@@ -161,15 +161,11 @@ class DinoVisionTransformer(nn.Module):
         self.norm = norm_layer(embed_dim)
         self.head = nn.Identity()
 
-        self.mask_token = jt.zeros(1, embed_dim)
+        self.mask_token = jt.zeros((1, embed_dim))
 
         self.init_weights()
 
     def init_weights(self):
-        trunc_normal_(self.pos_embed, std=0.02)
-        jt.init.gauss_(self.cls_token, mean=0.0, std=1e-6)
-        if self.register_tokens is not None:
-            jt.init.gauss_(self.register_tokens, mean=0.0, std=1e-6)
         named_apply(init_weights_vit_timm, self)
 
     def interpolate_pos_encoding(self, x, w, h):
@@ -178,7 +174,7 @@ class DinoVisionTransformer(nn.Module):
         N = self.pos_embed.shape[1] - 1
         if npatch == N and w == h:
             return self.pos_embed
-        pos_embed = self.pos_embed.float()
+        pos_embed = self.pos_embed.float32()
         class_pos_embed = pos_embed[:, 0]
         patch_pos_embed = pos_embed[:, 1:]
         dim = x.shape[-1]
@@ -187,37 +183,38 @@ class DinoVisionTransformer(nn.Module):
         # we add a small number to avoid floating point error in the interpolation
         # see discussion at https://github.com/facebookresearch/dino/issues/8
         # DINOv2 with register modify the interpolate_offset from 0.1 to 0.0
-        w0, h0 = w0 + self.interpolate_offset, h0 + self.interpolate_offset
+        w0_float, h0_float = w0 + self.interpolate_offset, h0 + self.interpolate_offset
         # w0, h0 = w0 + 0.1, h0 + 0.1
         
         sqrt_N = math.sqrt(N)
-        sx, sy = float(w0) / sqrt_N, float(h0) / sqrt_N
         patch_pos_embed = nn.interpolate(
             patch_pos_embed.reshape(1, int(sqrt_N), int(sqrt_N), dim).permute(0, 3, 1, 2),
-            scale_factor=(sx, sy),
+            size=(int(w0_float), int(h0_float)),
             # (int(w0), int(h0)), # to solve the upsampling shape issue
             mode="bicubic",
         )
         
-        assert int(w0) == patch_pos_embed.shape[-2]
-        assert int(h0) == patch_pos_embed.shape[-1]
+        assert int(w0_float) == patch_pos_embed.shape[-2]
+        assert int(h0_float) == patch_pos_embed.shape[-1]
         patch_pos_embed = patch_pos_embed.permute(0, 2, 3, 1).view(1, -1, dim)
-        return jt.concat((class_pos_embed.unsqueeze(0), patch_pos_embed), dim=1).to(previous_dtype)
+        out = jt.concat((class_pos_embed.unsqueeze(0), patch_pos_embed), dim=1)
+        return out.astype(previous_dtype) if previous_dtype != out.dtype else out
 
     def prepare_tokens_with_masks(self, x, masks=None):
         B, nc, w, h = x.shape
         x = self.patch_embed(x)
         if masks is not None:
-            x = jt.where(masks.unsqueeze(-1), self.mask_token.to(x.dtype).unsqueeze(0), x)
+            mask_token = self.mask_token.unsqueeze(0)
+            x = jt.where(masks.unsqueeze(-1), mask_token, x)
 
-        x = jt.concat((self.cls_token.expand(x.shape[0], -1, -1), x), dim=1)
+        x = jt.concat((self.cls_token.expand((x.shape[0], self.cls_token.shape[1], self.cls_token.shape[2])), x), dim=1)
         x = x + self.interpolate_pos_encoding(x, w, h)
 
         if self.register_tokens is not None:
             x = jt.concat(
                 (
                     x[:, :1],
-                    self.register_tokens.expand(x.shape[0], -1, -1),
+                    self.register_tokens.expand((x.shape[0], self.register_tokens.shape[1], self.register_tokens.shape[2])),
                     x[:, 1:],
                 ),
                 dim=1,
@@ -328,7 +325,7 @@ class DinoVisionTransformer(nn.Module):
 def init_weights_vit_timm(module: nn.Module, name: str = ""):
     """ViT weight initialization, original timm impl (for reproducibility)"""
     if isinstance(module, nn.Linear):
-        trunc_normal_(module.weight, std=0.02)
+        module.weight = jt.init.trunc_normal_(module.weight, std=0.02)
         if module.bias is not None:
             jt.init.constant_(module.bias, 0)
 

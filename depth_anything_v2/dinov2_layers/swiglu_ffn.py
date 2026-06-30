@@ -5,7 +5,7 @@
 # LICENSE file in the root directory of this source tree.
 
 from typing import Callable, Optional
-
+import jittor as jt
 from jittor import Var, nn
 
 
@@ -27,7 +27,7 @@ class SwiGLUFFN(nn.Module):
 
     def execute(self, x: Var) -> Var:
         x12 = self.w12(x)
-        x1, x2 = x12.chunk(2, dim=-1)
+        x1, x2 = jt.misc.chunk(x12, 2, dim=-1)
         hidden = nn.silu(x1) * x2
         return self.w3(hidden)
 

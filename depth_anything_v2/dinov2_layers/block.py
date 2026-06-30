@@ -115,7 +115,7 @@ def drop_add_residual_stochastic_depth(
     # 1) extract subset using permutation
     b, n, d = x.shape
     sample_subset_size = max(int(b * (1 - sample_drop_ratio)), 1)
-    brange = (jt.randperm(b, device=x.device))[:sample_subset_size]
+    brange = (jt.randperm(b))[:sample_subset_size]
     x_subset = x[brange]
 
     # 2) apply residual_func to get residual
@@ -127,14 +127,15 @@ def drop_add_residual_stochastic_depth(
     residual_scale_factor = b / sample_subset_size
 
     # 3) add the residual
-    x_plus_residual = jt.index_add(x_flat, 0, brange, residual.to(dtype=x.dtype), alpha=residual_scale_factor)
+    residual_scaled = residual.astype(x.dtype) * residual_scale_factor
+    x_plus_residual = jt.misc.index_add_(x_flat, 0, brange, residual_scaled)
     return x_plus_residual.view_as(x)
 
 
 def get_branges_scales(x, sample_drop_ratio=0.0):
     b, n, d = x.shape
     sample_subset_size = max(int(b * (1 - sample_drop_ratio)), 1)
-    brange = (jt.randperm(b, device=x.device))[:sample_subset_size]
+    brange = (jt.randperm(b))[:sample_subset_size]
     residual_scale_factor = b / sample_subset_size
     return brange, residual_scale_factor
 
@@ -143,10 +144,11 @@ def add_residual(x, brange, residual, residual_scale_factor, scaling_vector=None
     if scaling_vector is None:
         x_flat = x.flatten(1)
         residual = residual.flatten(1)
-        x_plus_residual = jt.index_add(x_flat, 0, brange, residual.to(dtype=x.dtype), alpha=residual_scale_factor)
+        residual_scaled = residual.astype(x.dtype) * residual_scale_factor
+        x_plus_residual = jt.misc.index_add_(x_flat, 0, brange, residual_scaled)
     else:
         x_plus_residual = scaled_index_add(
-            x, brange, residual.to(dtype=x.dtype), scaling=scaling_vector, alpha=residual_scale_factor
+            x, brange, residual.astype(x.dtype), scaling=scaling_vector, alpha=residual_scale_factor
         )
     return x_plus_residual
 

@@ -8,10 +8,16 @@ from .util.blocks import FeatureFusionBlock, _make_scratch
 from .util.transform import Resize, NormalizeImage, PrepareForNet
 
 
+def _apply_transforms(sample, transforms):
+    for transform in transforms:
+        sample = transform(sample)
+    return sample
+
+
 def _make_fusion_block(features, use_bn, size=None):
     return FeatureFusionBlock(
         features,
-        nn.ReLU(False),
+        nn.ReLU(),
         deconv=False,
         bn=use_bn,
         expand=False,
@@ -27,7 +33,7 @@ class ConvBlock(nn.Module):
         self.conv_block = nn.Sequential(
             nn.Conv2d(in_feature, out_feature, kernel_size=3, stride=1, padding=1),
             nn.BatchNorm2d(out_feature),
-            nn.ReLU(True)
+            nn.ReLU()
         )
     
     def execute(self, x):
@@ -107,9 +113,9 @@ class DPTHead(nn.Module):
         self.scratch.output_conv1 = nn.Conv2d(head_features_1, head_features_1 // 2, kernel_size=3, stride=1, padding=1)
         self.scratch.output_conv2 = nn.Sequential(
             nn.Conv2d(head_features_1 // 2, head_features_2, kernel_size=3, stride=1, padding=1),
-            nn.ReLU(True),
+            nn.ReLU(),
             nn.Conv2d(head_features_2, 1, kernel_size=1, stride=1, padding=0),
-            nn.ReLU(True),
+            nn.ReLU(),
             nn.Identity(),
         )
     
@@ -119,8 +125,8 @@ class DPTHead(nn.Module):
         for i, x in enumerate(out_features):
             if self.use_clstoken:
                 x, cls_token = x[0], x[1]
-                readout = cls_token.unsqueeze(1).expand_as(x)
-                x = self.readout_projects[i](jt.concat((x, readout), -1))
+                readout = cls_token.unsqueeze(1).expand(x.shape)
+                x = self.readout_projects[i](jt.concat((x, readout), dim=-1))
             else:
                 x = x[0]
             
@@ -185,15 +191,14 @@ class DepthAnythingV2(nn.Module):
         
         return depth,fts
     
-    @jt.no_grad()
     def infer_image(self, raw_image, input_size=518):
         image, (h, w) = self.image2tensor(raw_image, input_size)
         
-        depth = self.execute(image)
+        depth, _ = self.execute(image)
+        # print(depth.shape) # (B, 1, H, W)
+        depth = nn.interpolate(depth, (h, w), mode="bilinear", align_corners=True)[0, 0]
         
-        depth = nn.interpolate(depth[:, None], (h, w), mode="bilinear", align_corners=True)[0, 0]
-        
-        return depth.cpu().numpy()
+        return depth.numpy()
     
     def image2tensor(self, raw_image, input_size=518):        
         transform = Compose([
@@ -215,10 +220,7 @@ class DepthAnythingV2(nn.Module):
         image = cv2.cvtColor(raw_image, cv2.COLOR_BGR2RGB) / 255.0
         
         image = transform({'image': image})['image']
-        image = jt.from_numpy(image).unsqueeze(0)
-        
-        DEVICE = 'cuda' if jt.cuda.is_available() else 'mps' if jt.backends.mps.is_available() else 'cpu'
-        image = image.to(DEVICE)
+        image = jt.array(image).unsqueeze(0)
         
         return image, (h, w)
 
