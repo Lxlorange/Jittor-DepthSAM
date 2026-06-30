@@ -1,15 +1,14 @@
 import argparse
 import os
 # os.environ["CUDA_VISIBLE_DEVICES"] = "2"
-import torch
-import torch.nn.functional as F
+import jittor as jt
 import datetime
 from segment_anything_training.build_DepthSAM import build_sam_DepthSAM
 from utils.dataset_rgb_strategy2 import SalObjDataset
-from utils.utils import adjust_lr, AvgMeter
-import torch.nn as nn
-import torch.distributed as dist
-import torch.utils.data as data
+from utils.utils import AvgMeter
+import jittor.nn as nn
+# import jittor.distributed as dist
+import jittor.dataset as data
 import math
 import random
 import numpy as np
@@ -22,7 +21,7 @@ from tqdm import tqdm
 def get_loader(image_root, gt_root, depth_root, batchsize, trainsize, distributed=False):
     dataset = SalObjDataset(image_root, gt_root, depth_root, trainsize)
     if distributed:
-        sampler = torch.utils.data.distributed.DistributedSampler(dataset)
+        sampler = jt.utils.data.distributed.DistributedSampler(dataset)
         shuffle = False
     else:
         sampler = None
@@ -37,11 +36,11 @@ def get_loader(image_root, gt_root, depth_root, batchsize, trainsize, distribute
 
 
 def structure_loss(pred, mask):
-    weit = 1 + 5 * torch.abs(F.avg_pool2d(mask, kernel_size=31, stride=1, padding=15) - mask)
-    wbce = F.binary_cross_entropy_with_logits(pred, mask, reduction='none')
+    weit = 1 + 5 * jt.abs(nn.avg_pool2d(mask, kernel_size=31, stride=1, padding=15) - mask)
+    wbce = nn.binary_cross_entropy_with_logits(pred, mask, reduction='none')
     wbce = (weit * wbce).sum(dim=(2, 3)) / weit.sum(dim=(2, 3))
 
-    pred = torch.sigmoid(pred)
+    pred = jt.sigmoid(pred)
     inter = ((pred * mask) * weit).sum(dim=(2, 3))
     union = ((pred + mask) * weit).sum(dim=(2, 3))
     wiou = 1 - (inter + 1) / (union - inter + 1)
@@ -50,45 +49,55 @@ def structure_loss(pred, mask):
 
 
 def is_dist_avail_and_initialized():
-    if not dist.is_available():
-        return False
-    if not dist.is_initialized():
-        return False
-    return True
-
+    """Jittor 中通过 jt.mpi 是否为 None 判断是否处于分布式环境"""
+    return jt.mpi is not None
 
 def get_rank():
     if not is_dist_avail_and_initialized():
         return 0
-    return dist.get_rank()
+    return jt.rank
 
+def get_world_size():
+    if not is_dist_avail_and_initialized():
+        return 1
+    return jt.world_size
+
+def barrier():
+    """Jittor 没有 dist.barrier()，可用 sync_all 做粗略同步"""
+    if jt.mpi is not None:
+        jt.sync_all()
 
 def init_distributed_mode(args):
-    if 'RANK' in os.environ and 'WORLD_SIZE' in os.environ and 'LOCAL_RANK' in os.environ:
-        args.rank = int(os.environ['RANK'])
-        args.world_size = int(os.environ['WORLD_SIZE'])
-        args.gpu = int(os.environ['LOCAL_RANK'])
-
-        dist.init_process_group(
-            backend='nccl',
-            init_method='env://',
-            world_size=args.world_size,
-            rank=args.rank
-        )
-        torch.cuda.set_device(args.gpu)
-        dist.barrier()  # 等待所有进程初始化完成
+    # 情况1：标准 MPI 环境（mpirun / mpiexec 启动）
+    if jt.mpi is not None:
+        args.rank = jt.rank
+        args.world_size = jt.world_size
+        
+        # 计算 local_rank（当前节点内的 GPU 编号）
+        if 'LOCAL_RANK' in os.environ:
+            args.gpu = int(os.environ['LOCAL_RANK'])
+        else:
+            args.gpu = jt.rank % jt.get_device_count()
+        
+        jt.flags.use_cuda = 1
+        jt.set_device(args.gpu)   # 或 jt.cuda.set_device(args.gpu)
+        
         distributed = True
-
         print(f"Distributed training initialized: rank {args.rank}/{args.world_size}, gpu {args.gpu}")
 
+    # 情况2：SLURM 集群环境
     elif 'SLURM_PROCID' in os.environ:
         args.rank = int(os.environ['SLURM_PROCID'])
-        args.gpu = args.rank % torch.cuda.device_count()
-        torch.cuda.set_device(args.gpu)
+        args.world_size = int(os.environ.get('SLURM_NTASKS', 1))
+        args.gpu = args.rank % jt.get_device_count()
+        
+        jt.flags.use_cuda = 1
+        jt.set_device(args.gpu)
+        
         distributed = True
-
         print(f"SLURM distributed training: rank {args.rank}, gpu {args.gpu}")
 
+    # 情况3：单卡 / 非分布式
     else:
         print("Not using distributed mode")
         distributed = False
@@ -106,7 +115,7 @@ class MOEAdapter(nn.Module):
         self.num_experts = num_experts
         self.top_k = top_k
 
-        self.register_buffer("current_aux_loss", torch.tensor(0.0))
+        self.register_buffer("current_aux_loss", jt.tensor(0.0))
 
         dim = blk.attn.qkv.in_features
         self.gate = nn.Linear(dim, num_experts)
@@ -125,23 +134,23 @@ class MOEAdapter(nn.Module):
         x_flat = x.reshape(B * N, C)
 
         gate_logits = self.gate(x_flat)
-        gate_weights = F.softmax(gate_logits, dim=-1)
+        gate_weights = nn.softmax(gate_logits, dim=-1)
 
         if self.training:
             avg_prob_per_expert = gate_weights.mean(dim=0)
-            _, top_k_indices = torch.topk(gate_weights, self.top_k, dim=-1)
-            expert_mask = F.one_hot(top_k_indices, self.num_experts).sum(dim=1)
+            _, top_k_indices = jt.topk(gate_weights, self.top_k, dim=-1)
+            expert_mask = nn.one_hot(top_k_indices, self.num_experts).sum(dim=1)
             tokens_per_expert = expert_mask.float().sum(dim=0)
             frac_tokens_per_expert = tokens_per_expert / (B * N)
             load_balance_loss = (avg_prob_per_expert * frac_tokens_per_expert).sum()
             self.current_aux_loss = load_balance_loss * self.num_experts
         else:
-            self.current_aux_loss = torch.tensor(0.0, device=x.device, dtype=x.dtype)
+            self.current_aux_loss = jt.tensor(0.0, device=x.device, dtype=x.dtype)
 
-        top_k_weights, top_k_indices = torch.topk(gate_weights, self.top_k, dim=-1)
+        top_k_weights, top_k_indices = jt.topk(gate_weights, self.top_k, dim=-1)
         top_k_weights = top_k_weights / top_k_weights.sum(dim=-1, keepdim=True)  # 归一化
 
-        output = torch.zeros_like(x_flat)
+        output = jt.zeros_like(x_flat)
         for i in range(self.top_k):
             expert_idx = top_k_indices[:, i]
             expert_weight = top_k_weights[:, i].unsqueeze(-1)
@@ -164,27 +173,27 @@ class ContrastiveLoss(nn.Module):
     def __init__(self, batch_size, device='cuda', temperature=0.1):
         super().__init__()
         self.batch_size = batch_size
-        self.register_buffer("temperature", torch.tensor(temperature).to(device))  # 超参数 温度
+        self.register_buffer("temperature", jt.tensor(temperature).to(device))  # 超参数 温度
         self.register_buffer("negatives_mask", (
-            ~torch.eye(batch_size * 2, batch_size * 2, dtype=bool).to(device)).float())  # 主对角线为0，其余位置全为1的mask矩阵
+            ~jt.eye(batch_size * 2, batch_size * 2, dtype=bool).to(device)).float())  # 主对角线为0，其余位置全为1的mask矩阵
 
     def forward(self, emb_i, emb_j):  # emb_i, emb_j 是来自同一图像的两种不同的预处理方法得到
-        z_i = F.normalize(emb_i, dim=1)  # (bs, dim)  --->  (bs, dim)
-        z_j = F.normalize(emb_j, dim=1)  # (bs, dim)  --->  (bs, dim)
+        z_i = jt.normalize(emb_i, dim=1)  # (bs, dim)  --->  (bs, dim)
+        z_j = jt.normalize(emb_j, dim=1)  # (bs, dim)  --->  (bs, dim)
 
-        representations = torch.cat([z_i, z_j], dim=0)  # repre: (2*bs, dim)
-        similarity_matrix = F.cosine_similarity(representations.unsqueeze(1), representations.unsqueeze(0),
+        representations = jt.concat([z_i, z_j], dim=0)  # repre: (2*bs, dim)
+        similarity_matrix = jt.cosine_similarity(representations.unsqueeze(1), representations.unsqueeze(0),
                                                 dim=2)  # simi_mat: (2*bs, 2*bs)
 
-        sim_ij = torch.diag(similarity_matrix, self.batch_size)  # bs
-        sim_ji = torch.diag(similarity_matrix, -self.batch_size)  # bs
-        positives = torch.cat([sim_ij, sim_ji], dim=0)  # 2*bs
+        sim_ij = jt.diag(similarity_matrix, self.batch_size)  # bs
+        sim_ji = jt.diag(similarity_matrix, -self.batch_size)  # bs
+        positives = jt.concat([sim_ij, sim_ji], dim=0)  # 2*bs
 
-        nominator = torch.exp(positives / self.temperature)  # 2*bs
-        denominator = self.negatives_mask * torch.exp(similarity_matrix / self.temperature)  # 2*bs, 2*bs
+        nominator = jt.exp(positives / self.temperature)  # 2*bs
+        denominator = self.negatives_mask * jt.exp(similarity_matrix / self.temperature)  # 2*bs, 2*bs
 
-        loss_partial = -torch.log(nominator / torch.sum(denominator, dim=1))  # 2*bs
-        loss = torch.sum(loss_partial) / (2 * self.batch_size)
+        loss_partial = -jt.log(nominator / jt.sum(denominator, dim=1))  # 2*bs
+        loss = jt.sum(loss_partial) / (2 * self.batch_size)
 
         print("nominator:", loss_partial)
 
@@ -199,7 +208,7 @@ class MOELossCollector:
 
         self.alpha = alpha
 
-    def get_total_loss(self, model: nn.Module) -> torch.Tensor:
+    def get_total_loss(self, model: nn.Module) -> jt.Tensor:
 
         total_aux_loss = 0.0
 
@@ -246,7 +255,7 @@ def train():
     print("开始初始化模型，优化器...")
     generator = build_sam_DepthSAM()
     generator.cuda()
-    generator_optimizer = torch.optim.Adam(generator.parameters(), opt.lr_gen)
+    generator_optimizer = jt.optim.Adam(generator.parameters(), opt.lr_gen)
 
     total_step = len(train_loader)
     print("Start Training...")
@@ -266,7 +275,7 @@ def train():
             batched_input = []
             for b_i in range(len(imgs)):
                 dict_input = dict()
-                input_image = (torch.as_tensor((imgs[b_i]).astype(dtype=np.uint8), device=generator.device)
+                input_image = (jt.as_tensor((imgs[b_i]).astype(dtype=np.uint8), device=generator.device)
                                .permute(2, 0, 1).contiguous())
                 dict_input['image'] = input_image
                 dict_input['original_size'] = imgs[b_i].shape[:2]
@@ -290,7 +299,7 @@ def train():
             os.makedirs(save_path)
 
         if epoch >= 10 or epoch % opt.epoch == 0:
-            torch.save(generator.state_dict(), save_path + 'Model' + '_%d' % epoch + '_gen.pth')
+            jt.save(generator.state_dict(), save_path + 'Model' + '_%d' % epoch + '_gen.pth')
             w_path = save_path + 'Model_' + str(epoch) + '_gen.pth'
             test_cod(w_path)
 
@@ -310,7 +319,7 @@ def test_cod(w_path):
         os.makedirs(save_path)
     generator = build_sam_DepthSAM()
 
-    data = torch.load(w_path)
+    data = jt.load(w_path)
     if list(data.keys())[0].startswith('module.'):
         from collections import OrderedDict
         new_state_dict = OrderedDict()
@@ -344,14 +353,14 @@ def test_cod(w_path):
             batched_input = []
             for b_i in tqdm(range(len(imgs))):
                 dict_input = dict()
-                input_image = (torch.as_tensor((imgs[b_i]).astype(dtype=np.uint8), device=generator.device)
+                input_image = (jt.as_tensor((imgs[b_i]).astype(dtype=np.uint8), device=generator.device)
                                .permute(2, 0, 1).contiguous())
                 dict_input['image'] = input_image
                 dict_input['original_size'] = imgs[b_i].shape[:2]
                 batched_input.append(dict_input)
 
             res = generator(batched_input, image)
-            res = F.upsample(res, size=gt.shape, mode='bilinear', align_corners=False)
+            res = nn.upsample(res, size=gt.shape, mode='bilinear', align_corners=False)
             res = res.sigmoid().data.cpu().detach().numpy().squeeze()
             res = (res - res.min()) / (res.max() - res.min() + 1e-8)
             mae_sum += np.sum(np.abs(res - gt)) * 1.0 / (gt.shape[0] * gt.shape[1])

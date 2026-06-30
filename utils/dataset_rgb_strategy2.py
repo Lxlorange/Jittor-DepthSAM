@@ -175,18 +175,22 @@ class SalObjDataset(data.Dataset):
 
 
         # self.filter_files()
-        self.size = len(self.img_list)
+        self.size = len(self.img_list)        
         self.img_transform = transforms.Compose([
             transforms.Resize((self.trainsize, self.trainsize)),
             transforms.ToTensor(),
-            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])])
+            transforms.ImageNormalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+        ])
+
         self.depth_transform = transforms.Compose([
             transforms.Resize((self.trainsize, self.trainsize)),
-            transforms.ToTensor()])
+            transforms.ToTensor()
+        ])
 
         self.gt_transform = transforms.Compose([
             transforms.Resize((self.trainsize, self.trainsize)),
-            transforms.ToTensor()])
+            transforms.ToTensor()
+        ])
 
 
     def __getitem__(self, index):
@@ -289,10 +293,12 @@ class SalObjDataset_with_constant_prompt(data.Dataset):
         self.img_transform = transforms.Compose([
             transforms.Resize((self.trainsize, self.trainsize)),
             transforms.ToTensor(),
-            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])])
+            transforms.ImageNormalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+        ])
         self.gt_transform = transforms.Compose([
             transforms.Resize((self.trainsize, self.trainsize)),
-            transforms.ToTensor()])
+            transforms.ToTensor()
+        ])
 
     def __getitem__(self, index):
         img_path = self.img_list[index]
@@ -379,10 +385,12 @@ class Image_prompt_kmeans_Dataset(data.Dataset):
         self.img_transform = transforms.Compose([
             transforms.Resize((self.trainsize, self.trainsize)),
             transforms.ToTensor(),
-            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])])
+            transforms.ImageNormalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+        ])
         self.gt_transform = transforms.Compose([
             transforms.Resize((self.trainsize, self.trainsize)),
-            transforms.ToTensor()])
+            transforms.ToTensor()
+        ])
 
     def __getitem__(self, index):
         img_path = self.img_list[index]
@@ -462,10 +470,12 @@ class Image_prompt_Dataset(data.Dataset):
         self.img_transform = transforms.Compose([
             transforms.Resize((self.trainsize, self.trainsize)),
             transforms.ToTensor(),
-            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])])
+            transforms.ImageNormalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+        ])
         self.gt_transform = transforms.Compose([
             transforms.Resize((self.trainsize, self.trainsize)),
-            transforms.ToTensor()])
+            transforms.ToTensor()
+        ])
 
     def __getitem__(self, index):
         img_path = self.img_list[index]
@@ -522,13 +532,12 @@ class Image_prompt_Dataset(data.Dataset):
 # dataloader for training
 def get_loader(image_root, gt_root, batchsize, trainsize, shuffle=True, num_workers=12, pin_memory=False):
     dataset = SalObjDataset(image_root, gt_root, trainsize)
-    # dataset = SalObjDataset_with_constant_prompt(image_root, gt_root, trainsize)
-    data_loader = data.DataLoader(dataset=dataset,
-                                  batch_size=batchsize,
-                                  shuffle=shuffle,
-                                  num_workers=num_workers,
-                                  pin_memory=pin_memory)
-    return data_loader
+    dataset.set_attrs(
+        batch_size=batchsize,
+        shuffle=shuffle,
+        num_workers=num_workers
+    )
+    return dataset
 
 
 # test dataset and loader
@@ -540,7 +549,7 @@ class test_dataset:
         self.transform = transforms.Compose([
             transforms.Resize((self.testsize, self.testsize)),
             transforms.ToTensor(),
-            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])])
+            transforms.ImageNormalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])])
         self.size = len(self.images)
         self.index = 0
 
@@ -585,11 +594,12 @@ class Test_Dataset(data.Dataset):
         self.img_transform = transforms.Compose([
             transforms.Resize((self.trainsize, self.trainsize)),
             transforms.ToTensor(),
-            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])])
-
+            transforms.ImageNormalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+        ])
         self.gt_transform = transforms.Compose([
             transforms.Resize((self.trainsize, self.trainsize)),
-            transforms.ToTensor()])
+            transforms.ToTensor()
+        ])
 
     def __getitem__(self, index):
         img_path = self.img_list[index]
@@ -617,29 +627,29 @@ class Test_Dataset(data.Dataset):
 
 def test_get_loader(image_root, batchsize, trainsize, shuffle=False, num_workers=0, pin_memory=False):
     dataset = Test_Dataset(image_root, trainsize)
-    data_loader = data.DataLoader(dataset=dataset,
-                                  batch_size=batchsize,
-                                  shuffle=shuffle,
-                                  num_workers=num_workers,
-                                  pin_memory=pin_memory)
-    return data_loader
+    dataset.set_attrs(
+        batch_size=batchsize,
+        shuffle=shuffle,
+        num_workers=num_workers
+    )
+    return dataset
 
 
 def image_prompt_get_loader(image_root, gt_root, batchsize, trainsize, shuffle=False, num_workers=12, pin_memory=False):
     dataset = Image_prompt_Dataset(image_root, gt_root, trainsize)
-    data_loader = data.DataLoader(dataset=dataset,
-                                  batch_size=batchsize,
-                                  shuffle=shuffle,
-                                  num_workers=num_workers,
-                                  pin_memory=pin_memory)
-    return data_loader
+    dataset.set_attrs(
+        batch_size=batchsize,
+        shuffle=shuffle,
+        num_workers=num_workers
+    )
+    return dataset
 
 
 def image_prompt_get_loader_kmenas_choose(image_root, gt_root, kmeans_prompt_list,batchsize, trainsize, shuffle=False, num_workers=12, pin_memory=False):
     dataset = Image_prompt_kmeans_Dataset(image_root, gt_root, kmeans_prompt_list,trainsize)
-    data_loader = data.DataLoader(dataset=dataset,
-                                  batch_size=batchsize,
-                                  shuffle=shuffle,
-                                  num_workers=num_workers,
-                                  pin_memory=pin_memory)
-    return data_loader
+    dataset.set_attrs(
+        batch_size=batchsize,
+        shuffle=shuffle,
+        num_workers=num_workers
+    )
+    return dataset
