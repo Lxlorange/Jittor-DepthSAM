@@ -114,8 +114,8 @@ def drop_add_residual_stochastic_depth(
 
     # 3) add the residual
     residual_scaled = residual.astype(x.dtype) * residual_scale_factor
-    x_plus_residual = jt.misc.index_add_(x_flat, 0, brange, residual_scaled)
-    return x_plus_residual.view_as(x)
+    jt.misc.index_add_(x_flat, 0, brange, residual_scaled)
+    return x_flat.view_as(x)
 
 
 class NestedVarBlock(Block):
