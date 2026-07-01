@@ -113,8 +113,8 @@ def save_state_dict_npz(state_dict, path):
 
 
 def load_state_dict_npz(path):
-    data = np.load(path)
-    return {key: jt.array(data[key]) for key in data.files}
+    data = jt.load(path)
+    return data
 
 
 
@@ -202,12 +202,12 @@ def train():
         if epoch >= 10 or epoch % opt.epoch == 0:
             w_path = save_path + 'Model_' + str(epoch) + '_gen.npz'
             save_state_dict_npz(generator.state_dict(), w_path)
-            test_cod(w_path)
+            test_cod(w_path, generator)
 
 best_mae = 10000
 best_epoch = 0
 
-def test_cod(w_path):
+def test_cod(w_path, generator=None):
     opt = get_args()
     global best_mae, best_epoch
 
@@ -218,18 +218,19 @@ def test_cod(w_path):
     save_path = './checkpoints/'
     if not os.path.exists(save_path):
         os.makedirs(save_path)
-    generator = build_sam_DepthSAM(image_size=opt.trainsize)
 
-    data = load_state_dict_npz(w_path)
-    if list(data.keys())[0].startswith('module.'):
-        from collections import OrderedDict
-        new_state_dict = OrderedDict()
-        for k, v in data.items():
-            name = k.replace('module.', '')
-            new_state_dict[name] = v
-        generator.load_state_dict(new_state_dict)
-    else:
-        generator.load_state_dict(data)
+    if generator is None:
+        generator = build_sam_DepthSAM(image_size=opt.trainsize)
+        data = load_state_dict_npz(w_path)
+        if list(data.keys())[0].startswith('module.'):
+            from collections import OrderedDict
+            new_state_dict = OrderedDict()
+            for k, v in data.items():
+                name = k.replace('module.', '')
+                new_state_dict[name] = v
+            generator.load_state_dict(new_state_dict)
+        else:
+            generator.load_state_dict(data)
 
     generator.eval()
     for dataset in test_datasets:
@@ -248,8 +249,6 @@ def test_cod(w_path):
             gt = np.asarray(gt, np.float32)
             gt /= (gt.max() + 1e-8)
             batched_input = []
-            if not isinstance(image, jt.Var):
-                image = jt.array(image)
             if len(image.shape) == 3:
                 image = image.unsqueeze(0)
             for b_i in tqdm(range(image.shape[0])):
