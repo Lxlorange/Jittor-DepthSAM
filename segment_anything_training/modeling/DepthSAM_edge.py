@@ -121,7 +121,8 @@ class EdgeDepthSAM(nn.Module):
             raise FileNotFoundError(f"Checkpoint not found: {model_path}")
         print(f"Loading checkpoint from {model_path}")
 
-        state_dict = jt.load(model_path)
+        npz = np.load(model_path)
+        state_dict = {k: jt.array(npz[k]) for k in npz.files}
         self.image_encoder.load_state_dict(state_dict)
 
         for param in self.image_encoder.parameters():

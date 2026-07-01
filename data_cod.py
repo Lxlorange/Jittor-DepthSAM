@@ -1,7 +1,6 @@
 
 import os
 from PIL import Image
-import jittor as jt
 import jittor.dataset as data
 import jittor.transform as transforms
 import random
@@ -203,10 +202,10 @@ class test_dataset:
 
     def load_data(self):
         image = self.rgb_loader(self.images[self.index])
-        image = jt.array(self.transform(image)).unsqueeze(0)
+        image = np.expand_dims(self.transform(image), axis=0)
         gt = self.binary_loader(self.gts[self.index])
         depth = self.binary_loader(self.depths[self.index])
-        depth = jt.array(self.depths_transform(depth)).unsqueeze(0)
+        depth = np.expand_dims(self.depths_transform(depth), axis=0)
         name = self.images[self.index].split('/')[-1]
         image_for_post = self.rgb_loader(self.images[self.index])
         image_for_post = image_for_post.resize(gt.size)

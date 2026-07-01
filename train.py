@@ -113,8 +113,8 @@ def save_state_dict_npz(state_dict, path):
 
 
 def load_state_dict_npz(path):
-    data = jt.load(path)
-    return data
+    data = np.load(path)
+    return {key: jt.array(data[key]) for key in data.files}
 
 
 
@@ -248,9 +248,13 @@ def test_cod(w_path, generator=None):
             image, gt, depth, name, image_for_post = test_loader.load_data()
             gt = np.asarray(gt, np.float32)
             gt /= (gt.max() + 1e-8)
+            image = jt.array(image)
+            depth = jt.array(depth)
             batched_input = []
             if len(image.shape) == 3:
                 image = image.unsqueeze(0)
+            if len(depth.shape) == 3:
+                depth = depth.unsqueeze(0)
             for b_i in tqdm(range(image.shape[0])):
                 input_image = image[b_i]
                 batched_input.append(
