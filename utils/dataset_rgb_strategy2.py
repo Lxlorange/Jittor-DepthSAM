@@ -145,7 +145,7 @@ def randomPeper(img):
 class SalObjDataset(data.Dataset):
     def __init__(self, image_root, gt_root,depth_root, trainsize):
         super().__init__()
-        # self.trainsize = trainsize
+        self.trainsize = trainsize
         # file_write_obj_img = image_root
         # file_write_obj_gt = gt_root
         #
@@ -160,37 +160,44 @@ class SalObjDataset(data.Dataset):
         #         _video = gt.rstrip('\n')
         #         self.gt_list.append(_video)
 
-        self.trainsize = trainsize
-        self.img_list = [image_root + f for f in os.listdir(image_root) if f.endswith('.jpg') or f.endswith('.png') ]
+        
+        self.img_list = sorted([
+            os.path.join(image_root, f) 
+            for f in os.listdir(image_root) 
+            if f.lower().endswith(('.jpg', '.jpeg', '.png'))
+        ])
+        self.gt_list = sorted([
+            os.path.join(gt_root, f) 
+            for f in os.listdir(gt_root) 
+            if f.lower().endswith(('.jpg', '.jpeg', '.png'))
+        ])
+        self.depth_list = sorted([
+            os.path.join(depth_root, f) 
+            for f in os.listdir(depth_root) 
+            if f.lower().endswith(('.jpg', '.jpeg', '.png'))
+        ])
 
-        self.gt_list = [gt_root + f for f in os.listdir(gt_root) if f.endswith('.jpg')
-                    or f.endswith('.png')]
+        self.size = len(self.img_list)
 
-        self.depth_list = [depth_root + f for f in os.listdir(depth_root) if f.endswith('.jpg')
-                        or f.endswith('.png')]
-
-        self.img_list = sorted(self.img_list)
-        self.gt_list = sorted(self.gt_list)
-        self.depth_list = sorted(self.depth_list)
-
-
-
-        # self.filter_files()
-        self.size = len(self.img_list)        
+        assert len(self.img_list) > 0, f"No images found in {image_root}"
+        assert len(self.img_list) == len(self.gt_list) == len(self.depth_list), \
+            f"Counts mismatch: img={len(self.img_list)}, gt={len(self.gt_list)}, depth={len(self.depth_list)}"
+        
+        # Jittor Dataset 必须设置total_len
+        self.set_attrs(total_len=len(self.img_list))
+        
+        # 只保留Resize和ToTensor；ImageNormalize手动做
         self.img_transform = transforms.Compose([
             transforms.Resize((self.trainsize, self.trainsize)),
             transforms.ToTensor(),
-            transforms.ImageNormalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
         ])
-
         self.depth_transform = transforms.Compose([
             transforms.Resize((self.trainsize, self.trainsize)),
-            transforms.ToTensor()
+            transforms.ToTensor(),
         ])
-
         self.gt_transform = transforms.Compose([
             transforms.Resize((self.trainsize, self.trainsize)),
-            transforms.ToTensor()
+            transforms.ToTensor(),
         ])
 
 
@@ -201,16 +208,29 @@ class SalObjDataset(data.Dataset):
         image = self.rgb_loader(img_path)
         gt = self.binary_loader(gt_path)
         depth = self.binary_loader(depth_path)
-
-        image, gt,depth = cv_random_flip(image, gt,depth)
-        image, gt,depth = randomCrop(image, gt,depth)
-        image, gt,depth = randomRotation(image, gt,depth)
+        
+        image, gt, depth = cv_random_flip(image, gt, depth)
+        image, gt, depth = randomCrop(image, gt, depth)
+        image, gt, depth = randomRotation(image, gt, depth)
         image = colorEnhance(image)
-        image = self.img_transform(image)
-        gt = self.gt_transform(gt)
-        depth = self.depth_transform(depth)
-        return image, gt,depth
-
+        
+        # image: RGB (H,W,3) -> (3,H,W)
+        image = np.array(image.resize((self.trainsize, self.trainsize), Image.BILINEAR), dtype=np.float32)
+        image = np.ascontiguousarray(image.transpose(2, 0, 1)) / 255.0
+        mean = np.array([0.485, 0.456, 0.406], dtype=np.float32).reshape(3, 1, 1)
+        std = np.array([0.229, 0.224, 0.225], dtype=np.float32).reshape(3, 1, 1)
+        image = (image - mean) / std
+        
+        # gt: 灰度 (H,W) -> (1,H,W)
+        gt = np.array(gt.resize((self.trainsize, self.trainsize), Image.NEAREST), dtype=np.float32)
+        gt = np.ascontiguousarray(gt[np.newaxis, ...]) / 255.0
+        
+        # depth: 灰度 (H,W) -> (1,H,W)
+        depth = np.array(depth.resize((self.trainsize, self.trainsize), Image.BILINEAR), dtype=np.float32)
+        depth = np.ascontiguousarray(depth[np.newaxis, ...]) / 255.0
+        
+        return image, gt, depth
+    
     def filter_files(self):
         assert len(self.images) == len(self.gts) and len(self.gts) == len(self.images)
         images = []
@@ -534,12 +554,13 @@ class Image_prompt_Dataset(data.Dataset):
 
 
 # dataloader for training
-def get_loader(image_root, gt_root, depth_root, batchsize, trainsize, shuffle=True, num_workers=12, pin_memory=False):
+def get_loader(image_root, gt_root, depth_root, batchsize, trainsize, shuffle=True, num_workers=0, pin_memory=False):
     dataset = SalObjDataset(image_root, gt_root, depth_root, trainsize)
     dataset.set_attrs(
         batch_size=batchsize,
         shuffle=shuffle,
-        num_workers=num_workers
+        num_workers=num_workers,
+        keep_numpy_array=True
     )
     return dataset
 
@@ -640,17 +661,17 @@ def test_get_loader(image_root, batchsize, trainsize, shuffle=False, num_workers
     return dataset
 
 
-def image_prompt_get_loader(image_root, gt_root, batchsize, trainsize, shuffle=False, num_workers=12, pin_memory=False):
+def image_prompt_get_loader(image_root, gt_root, batchsize, trainsize, shuffle=False, num_workers=0, pin_memory=False):
     dataset = Image_prompt_Dataset(image_root, gt_root, trainsize)
     dataset.set_attrs(
         batch_size=batchsize,
         shuffle=shuffle,
         num_workers=num_workers
     )
-    return dataset
+    return dataset  
 
 
-def image_prompt_get_loader_kmenas_choose(image_root, gt_root, kmeans_prompt_list,batchsize, trainsize, shuffle=False, num_workers=12, pin_memory=False):
+def image_prompt_get_loader_kmenas_choose(image_root, gt_root, kmeans_prompt_list,batchsize, trainsize, shuffle=False, num_workers=0, pin_memory=False):
     dataset = Image_prompt_kmeans_Dataset(image_root, gt_root, kmeans_prompt_list,trainsize)
     dataset.set_attrs(
         batch_size=batchsize,

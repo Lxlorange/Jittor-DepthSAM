@@ -23,7 +23,7 @@ def get_loader(image_root, gt_root, depth_root, batchsize, trainsize, distribute
         sampler = None
         shuffle = True
 
-    dataset.set_attrs(batch_size=batchsize, shuffle=shuffle, num_workers=4)
+    dataset.set_attrs(batch_size=batchsize, shuffle=shuffle, num_workers=0, keep_numpy_array=True)
     return dataset, sampler
 
 
@@ -262,14 +262,25 @@ def train():
         train_loader_iter = iter(train_loader)
 
         for i, (images, gts, depth) in enumerate(train_loader_iter):
-
-            imgs = images.permute(0, 2, 3, 1).numpy()
+            print(f"Step {i}: images type={type(images)}, shape={images.shape if hasattr(images, 'shape') else 'N/A'}")
+            # 从 numpy 统一转成 jittor Var
+            images = jt.array(images)
+            gts = jt.array(gts)
+            depth = jt.array(depth)
+            if len(images.shape) == 3:
+                images = images.unsqueeze(0)
+            if len(gts.shape) == 3:
+                gts = gts.unsqueeze(0)
+            if len(depth.shape) == 3:
+                depth = depth.unsqueeze(0)
+            
+            B = images.shape[0]
             batched_input = []
-            for b_i in range(len(imgs)):
+            for b_i in range(B):
                 dict_input = dict()
-                input_image = jt.array((imgs[b_i]).astype(dtype=np.uint8)).permute(2, 0, 1).contiguous()
+                input_image = images[b_i]  # 直接取，已经是 (C, H, W)
                 dict_input['image'] = input_image
-                dict_input['original_size'] = imgs[b_i].shape[:2]
+                dict_input['original_size'] = (input_image.shape[1], input_image.shape[2])
                 batched_input.append(dict_input)
 
             s1 = generator(batched_input, images)
