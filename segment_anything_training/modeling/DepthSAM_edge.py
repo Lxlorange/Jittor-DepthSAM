@@ -30,11 +30,11 @@ def conv1x1_bn_relu(in_planes, out_planes, stride=1):
     )
 
 class MOEAdapter(nn.Module):
-    def __init__(self, blk, num_experts=8, top_k=None) -> None:
+    def __init__(self, blk, num_experts=8, top_k=2) -> None:
         super(MOEAdapter, self).__init__()
         self.block = blk
         self.num_experts = num_experts
-        self.top_k = num_experts if top_k is None else top_k
+        self.top_k = top_k
 
         dim = blk.attn.qkv.in_features
 
@@ -205,6 +205,9 @@ class EdgeDepthSAM(nn.Module):
         x = nn.interpolate(x, scale_factor=14 / 16, mode='bilinear', align_corners=True)
 
         depth,features = self.image_encoder(x)
+        # Test-only memory cut: the DepthAnything backbone is frozen, so avoid
+        # storing its backward graph on small GPUs.
+        features = [feature.detach() for feature in features]
 
         out1,out_1 = self.decoder(features[3], features[2], features[1], features[0])
         outputs = []

@@ -102,121 +102,21 @@ def init_distributed_mode(args):
     return distributed, args.gpu
 
 
-class MOEAdapter(nn.Module):
-    def __init__(self, blk, num_experts=8, top_k=4) -> None:
-        super(MOEAdapter, self).__init__()
-        self.block = blk
-        self.num_experts = num_experts
-        self.top_k = top_k
-
-        self.register_buffer("current_aux_loss", jt.tensor(0.0))
-
-        dim = blk.attn.qkv.in_features
-        self.gate = nn.Linear(dim, num_experts)
-        self.experts = nn.ModuleList([
-            nn.Sequential(
-                nn.Linear(dim, 32),
-                nn.GELU(),
-                nn.Linear(32, dim),
-                nn.GELU(),
-            ) for _ in range(num_experts)
-        ])
-
-    def execute(self, x):
-        # x shape: (B, H, W, C)
-        B, N, C = x.shape
-        x_flat = x.reshape(B * N, C)
-
-        gate_logits = self.gate(x_flat)
-        gate_weights = nn.softmax(gate_logits, dim=-1)
-
-        if self.training:
-            avg_prob_per_expert = gate_weights.mean(dim=0)
-            _, top_k_indices = jt.topk(gate_weights, self.top_k, dim=-1)
-            expert_mask = nn.one_hot(top_k_indices, self.num_experts).sum(dim=1)
-            tokens_per_expert = expert_mask.float().sum(dim=0)
-            frac_tokens_per_expert = tokens_per_expert / (B * N)
-            load_balance_loss = (avg_prob_per_expert * frac_tokens_per_expert).sum()
-            self.current_aux_loss = load_balance_loss * self.num_experts
+def save_state_dict_npz(state_dict, path):
+    np_state = {}
+    for key, value in state_dict.items():
+        if hasattr(value, "numpy"):
+            np_state[key] = value.numpy()
         else:
-            self.current_aux_loss = jt.zeros((), dtype=x.dtype)
-
-        top_k_weights, top_k_indices = jt.topk(gate_weights, self.top_k, dim=-1)
-        top_k_weights = top_k_weights / top_k_weights.sum(dim=-1, keepdim=True)  # 归一化
-
-        output = jt.zeros_like(x_flat)
-        for i in range(self.top_k):
-            expert_idx = top_k_indices[:, i]
-            expert_weight = top_k_weights[:, i].unsqueeze(-1)
-
-            for e_idx in range(self.num_experts):
-                mask = (expert_idx == e_idx)
-                if bool(mask.any().item()):
-                    expert_input = x_flat[mask]
-                    expert_output = self.experts[e_idx](expert_input)
-                    output[mask] += expert_weight[mask] * expert_output
-
-        output = output.reshape(B, N, C)
-        prompted = x + output
-        net = self.block(prompted)
-
-        return net
+            np_state[key] = np.asarray(value)
+    np.savez(path, **np_state)
 
 
+def load_state_dict_npz(path):
+    data = np.load(path)
+    return {key: jt.array(data[key]) for key in data.files}
 
 
-Contrastive_Loss = None
-
-
-class ContrastiveLoss(nn.Module):
-    def __init__(self, batch_size, device='cuda', temperature=0.1):
-        super().__init__()
-        self.batch_size = batch_size
-        self.register_buffer("temperature", jt.array(temperature))
-        self.register_buffer("negatives_mask", (1 - jt.init.eye(batch_size * 2)).float())
-
-    def execute(self, emb_i, emb_j):
-        z_i = emb_i / (emb_i.sqr().sum(dim=1, keepdims=True).sqrt() + 1e-12)
-        z_j = emb_j / (emb_j.sqr().sum(dim=1, keepdims=True).sqrt() + 1e-12)
-        representations = jt.concat([z_i, z_j], dim=0)
-        similarity_matrix = jt.matmul(representations, representations.transpose(0, 1))
-        # API uncertainty: jt.diag offset support differs by version, so use explicit indexing.
-        idx = jt.arange(self.batch_size)
-        positives = jt.concat(
-            [
-                similarity_matrix[idx, idx + self.batch_size],
-                similarity_matrix[idx + self.batch_size, idx],
-            ],
-            dim=0,
-        )
-        nominator = jt.exp(positives / self.temperature)
-        denominator = self.negatives_mask * jt.exp(similarity_matrix / self.temperature)
-        loss_partial = -jt.log(nominator / jt.sum(denominator, dim=1))
-        return jt.sum(loss_partial) / (2 * self.batch_size)
-
-
-Contrastive_Loss = ContrastiveLoss(batch_size=1)
-
-
-class MOELossCollector:
-    def __init__(self, alpha=0.01):
-
-        self.alpha = alpha
-
-    def get_total_loss(self, model: nn.Module) -> jt.Var:
-
-        total_aux_loss = jt.zeros(())
-
-        for module in model.modules():
-            if isinstance(module, MOEAdapter):
-                total_aux_loss += module.current_aux_loss
-
-        total_loss = self.alpha * total_aux_loss
-
-        return total_loss
-
-
-moe_loss_collector = MOELossCollector(alpha=0.01)
 
 
 def get_args():
@@ -286,9 +186,8 @@ def train():
                 batched_input.append(dict_input)
 
             s1 = generator(batched_input, images)
-            total_loss = moe_loss_collector.get_total_loss(generator)
             loss1 = structure_loss(s1, gts)
-            loss = loss1 + total_loss
+            loss = loss1
 
             generator_optimizer.step(loss)
 
@@ -301,8 +200,8 @@ def train():
             os.makedirs(save_path)
 
         if epoch >= 10 or epoch % opt.epoch == 0:
-            jt.save(generator.state_dict(), save_path + 'Model' + '_%d' % epoch + '_gen.pth')
-            w_path = save_path + 'Model_' + str(epoch) + '_gen.pth'
+            w_path = save_path + 'Model_' + str(epoch) + '_gen.npz'
+            save_state_dict_npz(generator.state_dict(), w_path)
             test_cod(w_path)
 
 best_mae = 10000
@@ -321,7 +220,7 @@ def test_cod(w_path):
         os.makedirs(save_path)
     generator = build_sam_DepthSAM(image_size=opt.trainsize)
 
-    data = jt.load(w_path)
+    data = load_state_dict_npz(w_path)
     if list(data.keys())[0].startswith('module.'):
         from collections import OrderedDict
         new_state_dict = OrderedDict()
@@ -348,14 +247,19 @@ def test_cod(w_path):
             image, gt, depth, name, image_for_post = test_loader.load_data()
             gt = np.asarray(gt, np.float32)
             gt /= (gt.max() + 1e-8)
-            imgs = image.permute(0, 2, 3, 1).numpy()
             batched_input = []
-            for b_i in tqdm(range(len(imgs))):
-                dict_input = dict()
-                input_image = jt.array((imgs[b_i]).astype(dtype=np.uint8)).permute(2, 0, 1).contiguous()
-                dict_input['image'] = input_image
-                dict_input['original_size'] = imgs[b_i].shape[:2]
-                batched_input.append(dict_input)
+            if not isinstance(image, jt.Var):
+                image = jt.array(image)
+            if len(image.shape) == 3:
+                image = image.unsqueeze(0)
+            for b_i in tqdm(range(image.shape[0])):
+                input_image = image[b_i]
+                batched_input.append(
+                    {
+                        'image': input_image,
+                        'original_size': (input_image.shape[1], input_image.shape[2]),
+                    }
+                )
 
             res = generator(batched_input, image)
             res = nn.upsample(res, size=gt.shape, mode='bilinear', align_corners=False)
