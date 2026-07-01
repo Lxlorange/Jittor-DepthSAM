@@ -4,7 +4,9 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
+import os
 import os.path as ops
+import numpy as np
 import jittor as jt
 from jittor import nn, Var
 from typing import Any, Dict, List, Tuple, Union
@@ -112,9 +114,19 @@ class EdgeDepthSAM(nn.Module):
         """
         super().__init__()
         self.image_encoder = image_encoder
-        model_path = f'checkpoints/depth_anything_v2_vitl.pth'
-        self.image_encoder.load_state_dict(jt.load(model_path))
-        for param in self.image_encoder:
+        # 改成npz了，再转成Var
+        model_path = f'checkpoints/depth_anything_v2_vitl.npz'
+
+        if not os.path.exists(model_path):
+            raise FileNotFoundError(f"Checkpoint not found: {model_path}")
+        print(f"Loading checkpoint from {model_path}")
+
+        npz = np.load(model_path)
+        state_dict = {k: jt.array(npz[k]) for k in npz.files}
+
+        self.image_encoder.load_state_dict(state_dict)
+
+        for param in self.image_encoder.parameters():
             param.requires_grad = False
 
 
@@ -142,7 +154,7 @@ class EdgeDepthSAM(nn.Module):
     def execute(
         self,
         batched_input: List[Dict[str, Any]],x
-    ) -> [Var, Var]:
+    ):
         """
         Predicts masks end-to-end from provided images and prompts.
         If prompts are not known in advance, using SamPredictor is

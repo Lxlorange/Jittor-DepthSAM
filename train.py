@@ -173,7 +173,7 @@ class ContrastiveLoss(nn.Module):
         super().__init__()
         self.batch_size = batch_size
         self.register_buffer("temperature", jt.array(temperature))
-        self.register_buffer("negatives_mask", (1 - jt.eye(batch_size * 2)).float())
+        self.register_buffer("negatives_mask", (1 - jt.init.eye(batch_size * 2)).float())
 
     def execute(self, emb_i, emb_j):
         z_i = emb_i / (emb_i.sqr().sum(dim=1, keepdims=True).sqrt() + 1e-12)

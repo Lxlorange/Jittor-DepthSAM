@@ -86,6 +86,7 @@ def randomPeper(img):
 
 class SalObjDataset(data.Dataset):
     def __init__(self, image_root, gt_root, trainsize):
+        super.__init__()
         self.trainsize = trainsize
         self.images = [image_root + f for f in os.listdir(image_root) if f.endswith('.jpg')]
 

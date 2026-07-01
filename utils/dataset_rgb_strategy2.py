@@ -144,6 +144,7 @@ def randomPeper(img):
 # (e.g., 0 represents background and 1 represents foreground.), the performance will be further improved.
 class SalObjDataset(data.Dataset):
     def __init__(self, image_root, gt_root,depth_root, trainsize):
+        super().__init__()
         # self.trainsize = trainsize
         # file_write_obj_img = image_root
         # file_write_obj_gt = gt_root
@@ -255,6 +256,7 @@ class SalObjDataset(data.Dataset):
 
 class SalObjDataset_with_constant_prompt(data.Dataset):
     def __init__(self, image_root, gt_root, trainsize):
+        super().__init__()
         self.trainsize = trainsize
         file_write_obj_img = image_root
         file_write_obj_gt = gt_root
@@ -368,6 +370,7 @@ class SalObjDataset_with_constant_prompt(data.Dataset):
 
 class Image_prompt_kmeans_Dataset(data.Dataset):
     def __init__(self, image_root, gt_root,prompt_list, trainsize):
+        super().__init__()
         self.trainsize = trainsize
         file_write_obj_img = image_root
         file_write_obj_gt = gt_root
@@ -446,6 +449,7 @@ class Image_prompt_kmeans_Dataset(data.Dataset):
     
 class Image_prompt_Dataset(data.Dataset):
     def __init__(self, image_root, gt_root, trainsize):
+        super().__init__()
         self.trainsize = trainsize
         file_write_obj_img = image_root
         file_write_obj_gt = gt_root
@@ -581,6 +585,7 @@ class test_dataset:
 
 class Test_Dataset(data.Dataset):
     def __init__(self, data_root, trainsize):
+        super().__init__()
         self.trainsize = trainsize
         image_root = os.path.join(data_root, 'Images/')
         gt_root = os.path.join(data_root, 'gt/')
