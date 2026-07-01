@@ -1,8 +1,8 @@
 
 import os
 from PIL import Image
-import torch.utils.data as data
-import torchvision.transforms as transforms
+import jittor.dataset as data
+import jittor.transform as transforms
 import random
 import numpy as np
 from PIL import ImageEnhance
@@ -98,7 +98,7 @@ class SalObjDataset(data.Dataset):
         self.img_transform = transforms.Compose([
             transforms.Resize((self.trainsize, self.trainsize)),
             transforms.ToTensor(),
-            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])])
+            transforms.ImageNormalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])])
         self.gt_transform = transforms.Compose([
             transforms.Resize((self.trainsize, self.trainsize)),
             transforms.ToTensor()])
@@ -159,12 +159,12 @@ class SalObjDataset(data.Dataset):
 # dataloader for training
 def get_loader(image_root, gt_root, batchsize, trainsize, shuffle=True, num_workers=0, pin_memory=True):
     dataset = SalObjDataset(image_root, gt_root, trainsize)
-    data_loader = data.DataLoader(dataset=dataset,
-                                  batch_size=batchsize,
-                                  shuffle=shuffle,
-                                  num_workers=num_workers,
-                                  pin_memory=pin_memory)
-    return data_loader
+    dataset.set_attrs(
+        batch_size=batchsize,
+        shuffle=shuffle,
+        num_workers=num_workers
+    )
+    return dataset
 
 
 # test dataset and loader
@@ -184,7 +184,7 @@ class test_dataset:
         self.transform = transforms.Compose([
             transforms.Resize((self.testsize, self.testsize)),
             transforms.ToTensor(),
-            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])])
+            transforms.ImageNormalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])])
         self.gt_transform = transforms.ToTensor()
         # self.gt_transform = transforms.Compose([
         #     transforms.Resize((self.trainsize, self.trainsize)),

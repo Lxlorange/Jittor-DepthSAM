@@ -8,12 +8,8 @@ from utils.dataset_rgb_strategy2 import SalObjDataset
 from utils.utils import AvgMeter
 import jittor.nn as nn
 # import jittor.distributed as dist
-import jittor.dataset as data
-import math
-import random
 import numpy as np
 from data_cod import test_dataset
-import cv2
 from tqdm import tqdm
 
 
@@ -21,28 +17,26 @@ from tqdm import tqdm
 def get_loader(image_root, gt_root, depth_root, batchsize, trainsize, distributed=False):
     dataset = SalObjDataset(image_root, gt_root, depth_root, trainsize)
     if distributed:
-        sampler = jt.utils.data.distributed.DistributedSampler(dataset)
-        shuffle = False
+        # API uncertainty: Jittor distributed data sharding is version dependent.
+        raise NotImplementedError("distributed Jittor data loading is not wired in this port")
     else:
         sampler = None
         shuffle = True
 
-    data_loader = data.DataLoader(dataset=dataset,
-                                  batch_size=batchsize,
-                                  shuffle=shuffle,
-                                  num_workers=4,
-                                  pin_memory=True, drop_last=True, sampler=sampler)
-    return data_loader, sampler
+    dataset.set_attrs(batch_size=batchsize, shuffle=shuffle, num_workers=4)
+    return dataset, sampler
 
 
 def structure_loss(pred, mask):
     weit = 1 + 5 * jt.abs(nn.avg_pool2d(mask, kernel_size=31, stride=1, padding=15) - mask)
-    wbce = nn.binary_cross_entropy_with_logits(pred, mask, reduction='none')
-    wbce = (weit * wbce).sum(dim=(2, 3)) / weit.sum(dim=(2, 3))
+    max_val = jt.clamp(-pred, min_v=0)
+    log_term = max_val + ((-max_val).exp() + (-pred - max_val).exp()).log()
+    wbce = (1 - mask) * pred + log_term
+    wbce = jt.sum(weit * wbce, dims=[2, 3]) / jt.sum(weit, dims=[2, 3])
 
     pred = jt.sigmoid(pred)
-    inter = ((pred * mask) * weit).sum(dim=(2, 3))
-    union = ((pred + mask) * weit).sum(dim=(2, 3))
+    inter = jt.sum((pred * mask) * weit, dims=[2, 3])
+    union = jt.sum((pred + mask) * weit, dims=[2, 3])
     wiou = 1 - (inter + 1) / (union - inter + 1)
 
     return (wbce + wiou).mean()
@@ -128,7 +122,7 @@ class MOEAdapter(nn.Module):
             ) for _ in range(num_experts)
         ])
 
-    def forward(self, x):
+    def execute(self, x):
         # x shape: (B, H, W, C)
         B, N, C = x.shape
         x_flat = x.reshape(B * N, C)
@@ -145,7 +139,7 @@ class MOEAdapter(nn.Module):
             load_balance_loss = (avg_prob_per_expert * frac_tokens_per_expert).sum()
             self.current_aux_loss = load_balance_loss * self.num_experts
         else:
-            self.current_aux_loss = jt.tensor(0.0, device=x.device, dtype=x.dtype)
+            self.current_aux_loss = jt.zeros((), dtype=x.dtype)
 
         top_k_weights, top_k_indices = jt.topk(gate_weights, self.top_k, dim=-1)
         top_k_weights = top_k_weights / top_k_weights.sum(dim=-1, keepdim=True)  # 归一化
@@ -157,7 +151,7 @@ class MOEAdapter(nn.Module):
 
             for e_idx in range(self.num_experts):
                 mask = (expert_idx == e_idx)
-                if mask.any():
+                if bool(mask.any().item()):
                     expert_input = x_flat[mask]
                     expert_output = self.experts[e_idx](expert_input)
                     output[mask] += expert_weight[mask] * expert_output
@@ -169,35 +163,36 @@ class MOEAdapter(nn.Module):
         return net
 
 
+
+
+Contrastive_Loss = None
+
+
 class ContrastiveLoss(nn.Module):
     def __init__(self, batch_size, device='cuda', temperature=0.1):
         super().__init__()
         self.batch_size = batch_size
-        self.register_buffer("temperature", jt.tensor(temperature).to(device))  # 超参数 温度
-        self.register_buffer("negatives_mask", (
-            ~jt.eye(batch_size * 2, batch_size * 2, dtype=bool).to(device)).float())  # 主对角线为0，其余位置全为1的mask矩阵
+        self.register_buffer("temperature", jt.array(temperature))
+        self.register_buffer("negatives_mask", (1 - jt.eye(batch_size * 2)).float())
 
-    def forward(self, emb_i, emb_j):  # emb_i, emb_j 是来自同一图像的两种不同的预处理方法得到
-        z_i = jt.normalize(emb_i, dim=1)  # (bs, dim)  --->  (bs, dim)
-        z_j = jt.normalize(emb_j, dim=1)  # (bs, dim)  --->  (bs, dim)
-
-        representations = jt.concat([z_i, z_j], dim=0)  # repre: (2*bs, dim)
-        similarity_matrix = jt.cosine_similarity(representations.unsqueeze(1), representations.unsqueeze(0),
-                                                dim=2)  # simi_mat: (2*bs, 2*bs)
-
-        sim_ij = jt.diag(similarity_matrix, self.batch_size)  # bs
-        sim_ji = jt.diag(similarity_matrix, -self.batch_size)  # bs
-        positives = jt.concat([sim_ij, sim_ji], dim=0)  # 2*bs
-
-        nominator = jt.exp(positives / self.temperature)  # 2*bs
-        denominator = self.negatives_mask * jt.exp(similarity_matrix / self.temperature)  # 2*bs, 2*bs
-
-        loss_partial = -jt.log(nominator / jt.sum(denominator, dim=1))  # 2*bs
-        loss = jt.sum(loss_partial) / (2 * self.batch_size)
-
-        print("nominator:", loss_partial)
-
-        return loss
+    def execute(self, emb_i, emb_j):
+        z_i = emb_i / (emb_i.sqr().sum(dim=1, keepdims=True).sqrt() + 1e-12)
+        z_j = emb_j / (emb_j.sqr().sum(dim=1, keepdims=True).sqrt() + 1e-12)
+        representations = jt.concat([z_i, z_j], dim=0)
+        similarity_matrix = jt.matmul(representations, representations.transpose(0, 1))
+        # API uncertainty: jt.diag offset support differs by version, so use explicit indexing.
+        idx = jt.arange(self.batch_size)
+        positives = jt.concat(
+            [
+                similarity_matrix[idx, idx + self.batch_size],
+                similarity_matrix[idx + self.batch_size, idx],
+            ],
+            dim=0,
+        )
+        nominator = jt.exp(positives / self.temperature)
+        denominator = self.negatives_mask * jt.exp(similarity_matrix / self.temperature)
+        loss_partial = -jt.log(nominator / jt.sum(denominator, dim=1))
+        return jt.sum(loss_partial) / (2 * self.batch_size)
 
 
 Contrastive_Loss = ContrastiveLoss(batch_size=1)
@@ -208,9 +203,9 @@ class MOELossCollector:
 
         self.alpha = alpha
 
-    def get_total_loss(self, model: nn.Module) -> jt.Tensor:
+    def get_total_loss(self, model: nn.Module) -> jt.Var:
 
-        total_aux_loss = 0.0
+        total_aux_loss = jt.zeros(())
 
         for module in model.modules():
             if isinstance(module, MOEAdapter):
@@ -242,6 +237,7 @@ def get_args():
 
 def train():
     opt = get_args()
+    jt.flags.use_cuda = 1
 
     image_cod_root = "./Data_all/COD-D/Train_depth/Imgs/"
     gt_cod_root = "./Data_all/COD-D/Train_depth/GT/"
@@ -254,7 +250,6 @@ def train():
 
     print("开始初始化模型，优化器...")
     generator = build_sam_DepthSAM()
-    generator.cuda()
     generator_optimizer = jt.optim.Adam(generator.parameters(), opt.lr_gen)
 
     total_step = len(train_loader)
@@ -262,21 +257,17 @@ def train():
     for epoch in range(1, opt.epoch + 1):
         generator.train()
         loss_record = AvgMeter()
-        print('Learning Rate: {}'.format(generator_optimizer.param_groups[0]['lr']))
+        print('Learning Rate: {}'.format(getattr(generator_optimizer, 'lr', opt.lr_gen)))
 
         train_loader_iter = iter(train_loader)
 
         for i, (images, gts, depth) in enumerate(train_loader_iter):
 
-            images = images.cuda()
-            gts = gts.cuda()
-
-            imgs = images.permute(0, 2, 3, 1).cpu().numpy()
+            imgs = images.permute(0, 2, 3, 1).numpy()
             batched_input = []
             for b_i in range(len(imgs)):
                 dict_input = dict()
-                input_image = (jt.as_tensor((imgs[b_i]).astype(dtype=np.uint8), device=generator.device)
-                               .permute(2, 0, 1).contiguous())
+                input_image = jt.array((imgs[b_i]).astype(dtype=np.uint8)).permute(2, 0, 1).contiguous()
                 dict_input['image'] = input_image
                 dict_input['original_size'] = imgs[b_i].shape[:2]
                 batched_input.append(dict_input)
@@ -286,14 +277,12 @@ def train():
             loss1 = structure_loss(s1, gts)
             loss = loss1 + total_loss
 
-            loss.backward()
-            generator_optimizer.step()
-            generator_optimizer.zero_grad()
+            generator_optimizer.step(loss)
 
-            loss_record.update(loss.data, opt.batchsize)
+            loss_record.update(loss, opt.batchsize)
             if i % 200 == 0 or i == total_step:
                 print('{} Epoch [{:03d}/{:03d}], Step [{:04d}/{:04d}], Pre Loss: {:.4f}, Pre1 Loss: {:.4f}'.
-                      format(datetime.datetime.now(), epoch, opt.epoch, i, total_step, loss_record.show(), loss1.data))
+                      format(datetime.datetime.now(), epoch, opt.epoch, i, total_step, loss_record.show(), float(loss1.item())))
 
         if not os.path.exists(save_path):
             os.makedirs(save_path)
@@ -330,7 +319,6 @@ def test_cod(w_path):
     else:
         generator.load_state_dict(data)
 
-    generator.cuda()
     generator.eval()
     for dataset in test_datasets:
         save_path = './test_maps/' + dataset + '/'
@@ -347,21 +335,18 @@ def test_cod(w_path):
             image, gt, depth, name, image_for_post = test_loader.load_data()
             gt = np.asarray(gt, np.float32)
             gt /= (gt.max() + 1e-8)
-            image = image.cuda()
-
-            imgs = image.permute(0, 2, 3, 1).cpu().numpy()
+            imgs = image.permute(0, 2, 3, 1).numpy()
             batched_input = []
             for b_i in tqdm(range(len(imgs))):
                 dict_input = dict()
-                input_image = (jt.as_tensor((imgs[b_i]).astype(dtype=np.uint8), device=generator.device)
-                               .permute(2, 0, 1).contiguous())
+                input_image = jt.array((imgs[b_i]).astype(dtype=np.uint8)).permute(2, 0, 1).contiguous()
                 dict_input['image'] = input_image
                 dict_input['original_size'] = imgs[b_i].shape[:2]
                 batched_input.append(dict_input)
 
             res = generator(batched_input, image)
             res = nn.upsample(res, size=gt.shape, mode='bilinear', align_corners=False)
-            res = res.sigmoid().data.cpu().detach().numpy().squeeze()
+            res = res.sigmoid().numpy().squeeze()
             res = (res - res.min()) / (res.max() - res.min() + 1e-8)
             mae_sum += np.sum(np.abs(res - gt)) * 1.0 / (gt.shape[0] * gt.shape[1])
 

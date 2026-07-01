@@ -530,8 +530,8 @@ class Image_prompt_Dataset(data.Dataset):
 
 
 # dataloader for training
-def get_loader(image_root, gt_root, batchsize, trainsize, shuffle=True, num_workers=12, pin_memory=False):
-    dataset = SalObjDataset(image_root, gt_root, trainsize)
+def get_loader(image_root, gt_root, depth_root, batchsize, trainsize, shuffle=True, num_workers=12, pin_memory=False):
+    dataset = SalObjDataset(image_root, gt_root, depth_root, trainsize)
     dataset.set_attrs(
         batch_size=batchsize,
         shuffle=shuffle,
