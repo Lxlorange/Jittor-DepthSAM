@@ -582,7 +582,7 @@ class test_dataset:
         image = self.rgb_loader(self.images[self.index])
         HH = image.size[0]
         WW = image.size[1]
-        image = self.transform(image).unsqueeze(0)
+        image = jt.array(self.transform(image)).unsqueeze(0)
         name = self.images[self.index].split('/')[-1]
         if name.endswith('.jpg'):
             name = name.split('.jpg')[0] + '.png'
