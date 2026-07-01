@@ -249,7 +249,7 @@ def train():
     save_path = './checkpoints/'
 
     print("开始初始化模型，优化器...")
-    generator = build_sam_DepthSAM()
+    generator = build_sam_DepthSAM(image_size=opt.trainsize)
     generator_optimizer = jt.optim.Adam(generator.parameters(), opt.lr_gen)
 
     total_step = len(train_loader)
@@ -262,6 +262,8 @@ def train():
         train_loader_iter = iter(train_loader)
 
         for i, (images, gts, depth) in enumerate(train_loader_iter):
+            if i >= 10:
+                break
             print(f"Step {i}: images type={type(images)}, shape={images.shape if hasattr(images, 'shape') else 'N/A'}")
             # 从 numpy 统一转成 jittor Var
             images = jt.array(images)
@@ -317,7 +319,7 @@ def test_cod(w_path):
     save_path = './checkpoints/'
     if not os.path.exists(save_path):
         os.makedirs(save_path)
-    generator = build_sam_DepthSAM()
+    generator = build_sam_DepthSAM(image_size=opt.trainsize)
 
     data = jt.load(w_path)
     if list(data.keys())[0].startswith('module.'):

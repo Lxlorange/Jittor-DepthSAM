@@ -13,11 +13,10 @@ model_configs = {
     'vitg': {'encoder': 'vitg', 'features': 384, 'out_channels': [1536, 1536, 1536, 1536]}
 }
 
-def build_sam_DepthSAM():
+def build_sam_DepthSAM(image_size=512):
     prompt_embed_dim = 256
-    image_size = 512
-    vit_patch_size = 2
-    image_embedding_size = image_size // vit_patch_size
+    image_embedding_stride = 8
+    image_embedding_size = image_size // image_embedding_stride
     mobile_sam = EdgeDepthSAM(
             image_encoder=DepthAnythingV2(**model_configs['vitl']),
             prompt_encoder=PromptEncoder(
