@@ -265,10 +265,10 @@ def test_cod(w_path, generator=None):
                 )
 
             res = generator(batched_input, image)
-            res = nn.upsample(res, size=gt.shape, mode='bilinear', align_corners=False)
+            res = nn.upsample(res, size=gt.shape[-2:], mode='bilinear', align_corners=False)
             res = res.sigmoid().numpy().squeeze()
             res = (res - res.min()) / (res.max() - res.min() + 1e-8)
-            mae_sum += np.sum(np.abs(res - gt)) * 1.0 / (gt.shape[0] * gt.shape[1])
+            mae_sum += np.sum(np.abs(res - gt)) * 1.0 / (gt.shape[-2] * gt.shape[-1])
 
         mae = mae_sum / test_loader.size
 
