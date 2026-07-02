@@ -123,7 +123,7 @@ def load_state_dict_npz(path):
 
 def get_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--epoch', type=int, default=300, help='epoch number')
+    parser.add_argument('--epoch', type=int, default=200, help='epoch number')
     parser.add_argument('--lr_gen', type=float, default=5e-5, help='learning rate')
     parser.add_argument('--batchsize', type=int, default=2, help='training batch size')
     parser.add_argument('--trainsize', type=int, default=512, help='training dataset size')
@@ -159,7 +159,7 @@ def train():
             "trainsize": opt.trainsize,
             "train_root": image_cod_root,
             "test_root": "./Data_all/COD-D/Test_depth/",
-            "note": "single-card subset run; train loop currently limited to 10 steps",
+            "note": "single-card full-dataset run; recommended as about 2/3 of the original 300-epoch schedule",
         },
     )
 
@@ -177,8 +177,6 @@ def train():
         train_loader_iter = iter(train_loader)
 
         for i, (images, gts, depth) in enumerate(train_loader_iter):
-            if i >= 10:
-                break
             print(f"Step {i}: images type={type(images)}, shape={images.shape if hasattr(images, 'shape') else 'N/A'}")
             # 从 numpy 统一转成 jittor Var
             images = jt.array(images)
@@ -269,10 +267,9 @@ def test_cod(w_path, generator=None, monitor=None):
         test_loader = test_dataset(image_root, gt_root, d_root, opt.trainsize)
 
         mae_sum = 0
+        test_count = 0
 
         for i in range(test_loader.size):  # 250
-            if i >= 10:
-                break
             image, gt, depth, name, image_for_post = test_loader.load_data()
             gt = np.asarray(gt, np.float32)
             gt /= (gt.max() + 1e-8)
@@ -305,11 +302,12 @@ def test_cod(w_path, generator=None, monitor=None):
             cv2.imwrite(save_path + name, out_img)
             sample_mae = np.sum(np.abs(res - gt)) * 1.0 / (gt.shape[-2] * gt.shape[-1])
             mae_sum += sample_mae
+            test_count += 1
             if monitor is not None:
                 monitor.log_eval_sample(dataset, name, sample_mae)
                 monitor.save_prediction_panel(dataset, name, image_for_post, res, gt)
 
-        mae = mae_sum / test_loader.size
+        mae = mae_sum / max(test_count, 1)
 
         print(dataset, 'Res mae is : ', mae)
 

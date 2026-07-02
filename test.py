@@ -12,7 +12,7 @@ from tqdm import tqdm
 
 def get_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--epoch', type=int, default=50, help='epoch number')
+    parser.add_argument('--epoch', type=int, default=200, help='epoch number')
     parser.add_argument('--lr_gen', type=float, default=1e-4, help='learning rate')
     parser.add_argument('--batchsize', type=int, default=1, help='training batch size')
     parser.add_argument('--trainsize', type=int, default=512, help='training dataset size')
@@ -27,6 +27,7 @@ def get_args():
 opt = get_args()
 
 print('USE GPU', opt.gpu)
+jt.flags.use_cuda = 1
 
 def test():
 
@@ -40,7 +41,7 @@ def test():
             "model": "./checkpoints/Model_1_gen.npz",
             "test_root": dataset_path,
             "test_datasets": test_datasets,
-            "note": "single-card subset test; loop currently limited to 10 samples",
+            "note": "single-card full-dataset test",
         },
     )
     generator = build_sam_DepthSAM(image_size=opt.trainsize)
@@ -70,8 +71,6 @@ def test():
         mae_sum = 0
         test_count = 0
         for i in tqdm(range(test_loader.size)):
-            if i >= 10:
-                break
             image, gt, depth, name, img_for_post = test_loader.load_data()
             gt = np.asarray(gt, np.float32)
             gt /= (gt.max() + 1e-8)
@@ -93,7 +92,9 @@ def test():
                 )
 
             res = generator(batched_input, image)
-            res = nn.upsample(res, size=gt.shape[-2:], mode='bilinear', align_corners=False)
+            target_h, target_w = gt.shape[-2], gt.shape[-1]
+            if res.shape[-2] != target_h or res.shape[-1] != target_w:
+                res = nn.upsample(res, size=(target_h, target_w), mode='bilinear', align_corners=False)
             res = res.sigmoid().numpy().squeeze()
             if np.isnan(res).any():
                 print(f"Warning: NaN in output for {name}, skipping")
