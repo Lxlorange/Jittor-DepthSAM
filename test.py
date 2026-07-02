@@ -3,36 +3,11 @@ import os
 # os.environ["CUDA_VISIBLE_DEVICES"] = "3"
 import jittor as jt
 import jittor.nn as nn
-import jittor.dataset as data
 import numpy as np
 import cv2
 from segment_anything_training.build_DepthSAM import build_sam_DepthSAM
 from data_cod import test_dataset
 from tqdm import tqdm
-
-def get_loader(image_root, gt_root, trainsize):
-    dataset = test_dataset(image_root, gt_root, trainsize)
-    data_loader = data.DataLoader(dataset=dataset,
-                                  batch_size=1,
-                                  shuffle=False,
-                                  num_workers=0,
-                                  pin_memory=True, )
-    return data_loader
-
-
-def structure_loss(pred, mask):
-    weit = 1 + 5 * jt.abs(nn.avg_pool2d(mask, kernel_size=31, stride=1, padding=15) - mask)
-    wbce = nn.binary_cross_entropy_with_logits(pred, mask, reduction='none')
-    wbce = (weit * wbce).sum(dim=(2, 3)) / weit.sum(dim=(2, 3))
-
-    pred = jt.sigmoid(pred)
-    inter = ((pred * mask) * weit).sum(dim=(2, 3))
-    union = ((pred + mask) * weit).sum(dim=(2, 3))
-    wiou = 1 - (inter + 1) / (union - inter + 1)
-
-    return (wbce + wiou).mean()
-
-
 
 def get_args():
     parser = argparse.ArgumentParser()
@@ -55,11 +30,10 @@ print('USE GPU', opt.gpu)
 def test():
 
     dataset_path = './Data_all/COD-D/Test_depth/'
-    test_datasets = ['CAMO', 'CHAMELEON', 'COD10K', 'NC4K']
-    # test_datasets = ['CAMO']
-    print("开始初始化模型，优化器...")
-    generator = build_sam_DepthSAM()
-    data = jt.load('./checkpoints/Model_COD_gen.pth', map_location='cpu')
+    test_datasets = ['CAMO']
+    generator = build_sam_DepthSAM(image_size=opt.trainsize)
+    npz = np.load('./checkpoints/Model_1_gen.npz')
+    data = {key: jt.array(npz[key]) for key in npz.files}
     if list(data.keys())[0].startswith('module.'):
         from collections import OrderedDict
         new_state_dict = OrderedDict()
@@ -70,64 +44,58 @@ def test():
     else:
         generator.load_state_dict(data)
 
-    if jt.cuda.is_available():
-        try:
-            # 尝试初始化 CUDA
-            jt.cuda.init()
-            device = jt.device('cuda:0')
-            generator = generator.to(device)
-            print(f"使用 GPU: {jt.cuda.get_device_name(0)}")
-        except RuntimeError as e:
-            print(f"CUDA 初始化失败: {e}")
-            print("切换到 CPU 模式")
-            device = jt.device('cpu')
-            generator = generator.to(device)
-    else:
-        print("CUDA 不可用，使用 CPU")
-        device = jt.device('cpu')
-        generator = generator.to(device)
-
-    # generator.cuda()
-    generator.eval()
+    generator.train()
     for dataset in test_datasets:
-        save_path = 'test_maps_rebuttal/' + dataset + '/'
+        save_path = './test_maps/' + dataset + '/'
         if not os.path.exists(save_path):
             os.makedirs(save_path)
 
         image_root = dataset_path + dataset + '/Imgs/'
         gt_root = dataset_path + dataset + '/GT/'
         g_root = dataset_path + dataset + '/depth/'
-        test_loader = test_dataset(image_root, gt_root,g_root, opt.trainsize)
+        test_loader = test_dataset(image_root, gt_root, g_root, opt.trainsize)
 
-        with jt.no_grad():
-            mae_sum = 0
-            for i in tqdm(range(test_loader.size)):
-                image, gt,depth, name, img_for_post = test_loader.load_data()
-                gt = np.asarray(gt, np.float32)
-                gt /= (gt.max() + 1e-8)
-                image = image.to(device)
+        mae_sum = 0
+        test_count = 0
+        for i in tqdm(range(test_loader.size)):
+            if i >= 10:
+                break
+            image, gt, depth, name, img_for_post = test_loader.load_data()
+            gt = np.asarray(gt, np.float32)
+            gt /= (gt.max() + 1e-8)
+            image = jt.array(image)
+            depth = jt.array(depth)
+            if len(image.shape) == 3:
+                image = image.unsqueeze(0)
+            if len(depth.shape) == 3:
+                depth = depth.unsqueeze(0)
 
-                imgs = image.permute(0, 2, 3, 1).cpu().numpy()
-                batched_input = []
-                for b_i in range(len(imgs)):
-                    dict_input = dict()
-                    input_image = (jt.as_tensor((imgs[b_i]).astype(dtype=np.uint8), device=generator.device)
-                                   .permute(2, 0, 1).contiguous())
-                    dict_input['image'] = input_image
-                    dict_input['original_size'] = imgs[b_i].shape[:2]
-                    batched_input.append(dict_input)
+            batched_input = []
+            for b_i in range(image.shape[0]):
+                input_image = image[b_i]
+                batched_input.append(
+                    {
+                        'image': input_image,
+                        'original_size': (input_image.shape[1], input_image.shape[2]),
+                    }
+                )
 
-                res = generator(batched_input, image)
+            res = generator(batched_input, image)
+            res = nn.upsample(res, size=gt.shape[-2:], mode='bilinear', align_corners=False)
+            res = res.sigmoid().numpy().squeeze()
+            if np.isnan(res).any():
+                print(f"Warning: NaN in output for {name}, skipping")
+                continue
+            res = (res - res.min()) / (res.max() - res.min() + 1e-8)
+            out_img = (res * 255).clip(0, 255).astype(np.uint8)
+            cv2.imwrite(save_path + name, out_img)
+            mae_sum += np.sum(np.abs(res - gt)) * 1.0 / (gt.shape[-2] * gt.shape[-1])
+            test_count += 1
 
-                res= nn.upsample(res, size=gt.shape, mode='bilinear', align_corners=False)
-                res = res.sigmoid().data.cpu().numpy().squeeze()
-                res = (res - res.min()) / (res.max() - res.min() + 1e-8)
+        mae = mae_sum / test_count
+        print(dataset, 'mae is : ', mae)
 
-                mae_sum += np.sum(np.abs(res - gt)) * 1.0 / (gt.shape[0] * gt.shape[1])
-                cv2.imwrite(save_path + name, res * 255)
-            mae = mae_sum / test_loader.size
-            print(dataset, 'mae is : ', mae)
-
+        
 if __name__ == '__main__':
     test()
 
