@@ -26,6 +26,7 @@ def get_args():
 opt = get_args()
 
 print('USE GPU', opt.gpu)
+jt.flags.use_cuda = 1
 
 def test():
 
@@ -58,11 +59,15 @@ def test():
         mae_sum = 0
         test_count = 0
         for i in tqdm(range(test_loader.size)):
-            if i >= 10:
-                break
+            # if i >= 10:
+            #     break
             image, gt, depth, name, img_for_post = test_loader.load_data()
             gt = np.asarray(gt, np.float32)
             gt /= (gt.max() + 1e-8)
+            depth_np = np.asarray(depth, np.float32) if not isinstance(depth, np.ndarray) else depth
+            print(f"[{name}] depth min={depth_np.min():.4f}, max={depth_np.max():.4f}, "
+                f"has zero={(depth_np==0).sum()}, has nan={np.isnan(depth_np).any()}")
+
             image = jt.array(image)
             depth = jt.array(depth)
             if len(image.shape) == 3:
@@ -81,7 +86,9 @@ def test():
                 )
 
             res = generator(batched_input, image)
-            res = nn.upsample(res, size=gt.shape[-2:], mode='bilinear', align_corners=False)
+            target_h, target_w = gt.shape[-2], gt.shape[-1]
+            if res.shape[-2] != target_h or res.shape[-1] != target_w:
+                res = nn.upsample(res, size=(target_h, target_w), mode='bilinear', align_corners=False)
             res = res.sigmoid().numpy().squeeze()
             if np.isnan(res).any():
                 print(f"Warning: NaN in output for {name}, skipping")

@@ -247,8 +247,8 @@ def test_cod(w_path, generator=None):
         mae_sum = 0
 
         for i in range(test_loader.size):  # 250
-            if i >= 10:
-                break
+            # if i >= 10:
+            #     break
             image, gt, depth, name, image_for_post = test_loader.load_data()
             gt = np.asarray(gt, np.float32)
             gt /= (gt.max() + 1e-8)
@@ -275,8 +275,8 @@ def test_cod(w_path, generator=None):
                 print(f"Warning: NaN in output for {name}, skipping")
                 continue
             res = (res - res.min()) / (res.max() - res.min() + 1e-8)
-            out_img = (res * 255).clip(0, 255).astype(np.uint8)
-            cv2.imwrite(save_path + name, out_img)
+            # out_img = (res * 255).clip(0, 255).astype(np.uint8)
+            # cv2.imwrite(save_path + name, out_img)
             mae_sum += np.sum(np.abs(res - gt)) * 1.0 / (gt.shape[-2] * gt.shape[-1])
 
         mae = mae_sum / test_loader.size
