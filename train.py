@@ -1,6 +1,7 @@
 import argparse
 import os
 # os.environ["CUDA_VISIBLE_DEVICES"] = "2"
+import cv2
 import jittor as jt
 import datetime
 from segment_anything_training.build_DepthSAM import build_sam_DepthSAM
@@ -232,7 +233,8 @@ def test_cod(w_path, generator=None):
         else:
             generator.load_state_dict(data)
 
-    generator.eval()
+    # generator.eval() #不知道为啥会让res变Nan
+    generator.train()
     for dataset in test_datasets:
         save_path = './test_maps/' + dataset + '/'
         if not os.path.exists(save_path):
@@ -245,6 +247,8 @@ def test_cod(w_path, generator=None):
         mae_sum = 0
 
         for i in range(test_loader.size):  # 250
+            if i >= 10:
+                break
             image, gt, depth, name, image_for_post = test_loader.load_data()
             gt = np.asarray(gt, np.float32)
             gt /= (gt.max() + 1e-8)
@@ -267,7 +271,12 @@ def test_cod(w_path, generator=None):
             res = generator(batched_input, image)
             res = nn.upsample(res, size=gt.shape[-2:], mode='bilinear', align_corners=False)
             res = res.sigmoid().numpy().squeeze()
+            if np.isnan(res).any():
+                print(f"Warning: NaN in output for {name}, skipping")
+                continue
             res = (res - res.min()) / (res.max() - res.min() + 1e-8)
+            out_img = (res * 255).clip(0, 255).astype(np.uint8)
+            cv2.imwrite(save_path + name, out_img)
             mae_sum += np.sum(np.abs(res - gt)) * 1.0 / (gt.shape[-2] * gt.shape[-1])
 
         mae = mae_sum / test_loader.size

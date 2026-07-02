@@ -182,7 +182,6 @@ class test_dataset:
         self.index = 0
 
     def load_data(self):
-        # ---------- image ----------
         image = self.rgb_loader(self.images[self.index])
         image = image.resize((self.testsize, self.testsize), Image.BILINEAR)
         image = np.array(image, dtype=np.float32)
@@ -192,20 +191,17 @@ class test_dataset:
         image = (image - mean) / std
         image = np.expand_dims(image, axis=0)   # (1, 3, H, W)
 
-        # ---------- gt ----------
         gt = self.binary_loader(self.gts[self.index])
-        gt_size = gt.size                         # 先保存 PIL size，给 image_for_post 用
+        gt_size = gt.size                         # 先保存PIL size，给image_for_post用
         gt = np.array(gt.resize((self.testsize, self.testsize), Image.NEAREST), dtype=np.float32)
         gt = np.ascontiguousarray(gt[np.newaxis, ...]) / 255.0   # (1, H, W)
 
-        # ---------- depth ----------
         depth = self.binary_loader(self.depths[self.index])
         depth = depth.resize((self.testsize, self.testsize), Image.BILINEAR)
         depth = np.array(depth, dtype=np.float32)
         depth = np.ascontiguousarray(depth[np.newaxis, ...]) / 255.0
         depth = np.expand_dims(depth, axis=0)   # (1, 1, H, W)
 
-        # ---------- name & image_for_post ----------
         name = self.images[self.index].split('/')[-1]
         image_for_post = self.rgb_loader(self.images[self.index])
         image_for_post = image_for_post.resize(gt_size)
