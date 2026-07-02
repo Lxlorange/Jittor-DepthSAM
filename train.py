@@ -7,6 +7,7 @@ import datetime
 from segment_anything_training.build_DepthSAM import build_sam_DepthSAM
 from utils.dataset_rgb_strategy2 import SalObjDataset
 from utils.utils import AvgMeter
+from utils.experiment_monitor import ExperimentMonitor
 import jittor.nn as nn
 # import jittor.distributed as dist
 import numpy as np
@@ -148,6 +149,19 @@ def train():
                                            trainsize=opt.trainsize, distributed=False)
 
     save_path = './checkpoints/'
+    monitor = ExperimentMonitor(
+        "jittor_train",
+        config={
+            "framework": "jittor",
+            "epoch": opt.epoch,
+            "lr_gen": opt.lr_gen,
+            "batchsize": opt.batchsize,
+            "trainsize": opt.trainsize,
+            "train_root": image_cod_root,
+            "test_root": "./Data_all/COD-D/Test_depth/",
+            "note": "single-card subset run; train loop currently limited to 10 steps",
+        },
+    )
 
     print("开始初始化模型，优化器...")
     generator = build_sam_DepthSAM(image_size=opt.trainsize)
@@ -193,6 +207,13 @@ def train():
             generator_optimizer.step(loss)
 
             loss_record.update(loss, opt.batchsize)
+            monitor.log_train_step(
+                epoch,
+                i,
+                total_step,
+                float(loss.item()),
+                getattr(generator_optimizer, 'lr', opt.lr_gen),
+            )
             if i % 200 == 0 or i == total_step:
                 print('{} Epoch [{:03d}/{:03d}], Step [{:04d}/{:04d}], Pre Loss: {:.4f}, Pre1 Loss: {:.4f}'.
                       format(datetime.datetime.now(), epoch, opt.epoch, i, total_step, loss_record.show(), float(loss1.item())))
@@ -203,12 +224,15 @@ def train():
         if epoch >= 10 or epoch % opt.epoch == 0:
             w_path = save_path + 'Model_' + str(epoch) + '_gen.npz'
             save_state_dict_npz(generator.state_dict(), w_path)
-            test_cod(w_path, generator)
+            test_cod(w_path, generator, monitor)
+
+    summary = monitor.finish({"checkpoint_dir": save_path})
+    print("Experiment log saved to:", summary["run_dir"])
 
 best_mae = 10000
 best_epoch = 0
 
-def test_cod(w_path, generator=None):
+def test_cod(w_path, generator=None, monitor=None):
     opt = get_args()
     global best_mae, best_epoch
 
@@ -273,11 +297,17 @@ def test_cod(w_path, generator=None):
             res = res.sigmoid().numpy().squeeze()
             if np.isnan(res).any():
                 print(f"Warning: NaN in output for {name}, skipping")
+                if monitor is not None:
+                    monitor.log_eval_sample(dataset, name, skipped=True)
                 continue
             res = (res - res.min()) / (res.max() - res.min() + 1e-8)
             out_img = (res * 255).clip(0, 255).astype(np.uint8)
             cv2.imwrite(save_path + name, out_img)
-            mae_sum += np.sum(np.abs(res - gt)) * 1.0 / (gt.shape[-2] * gt.shape[-1])
+            sample_mae = np.sum(np.abs(res - gt)) * 1.0 / (gt.shape[-2] * gt.shape[-1])
+            mae_sum += sample_mae
+            if monitor is not None:
+                monitor.log_eval_sample(dataset, name, sample_mae)
+                monitor.save_prediction_panel(dataset, name, image_for_post, res, gt)
 
         mae = mae_sum / test_loader.size
 

@@ -7,6 +7,7 @@ import numpy as np
 import cv2
 from segment_anything_training.build_DepthSAM import build_sam_DepthSAM
 from data_cod import test_dataset
+from utils.experiment_monitor import ExperimentMonitor
 from tqdm import tqdm
 
 def get_args():
@@ -31,6 +32,17 @@ def test():
 
     dataset_path = './Data_all/COD-D/Test_depth/'
     test_datasets = ['CAMO']
+    monitor = ExperimentMonitor(
+        "jittor_test",
+        config={
+            "framework": "jittor",
+            "trainsize": opt.trainsize,
+            "model": "./checkpoints/Model_1_gen.npz",
+            "test_root": dataset_path,
+            "test_datasets": test_datasets,
+            "note": "single-card subset test; loop currently limited to 10 samples",
+        },
+    )
     generator = build_sam_DepthSAM(image_size=opt.trainsize)
     npz = np.load('./checkpoints/Model_1_gen.npz')
     data = {key: jt.array(npz[key]) for key in npz.files}
@@ -85,15 +97,22 @@ def test():
             res = res.sigmoid().numpy().squeeze()
             if np.isnan(res).any():
                 print(f"Warning: NaN in output for {name}, skipping")
+                monitor.log_eval_sample(dataset, name, skipped=True)
                 continue
             res = (res - res.min()) / (res.max() - res.min() + 1e-8)
             out_img = (res * 255).clip(0, 255).astype(np.uint8)
             cv2.imwrite(save_path + name, out_img)
-            mae_sum += np.sum(np.abs(res - gt)) * 1.0 / (gt.shape[-2] * gt.shape[-1])
+            sample_mae = np.sum(np.abs(res - gt)) * 1.0 / (gt.shape[-2] * gt.shape[-1])
+            mae_sum += sample_mae
             test_count += 1
+            monitor.log_eval_sample(dataset, name, sample_mae)
+            monitor.save_prediction_panel(dataset, name, img_for_post, res, gt)
 
         mae = mae_sum / test_count
         print(dataset, 'mae is : ', mae)
+
+    summary = monitor.finish({"mode": "test"})
+    print("Experiment log saved to:", summary["run_dir"])
 
         
 if __name__ == '__main__':
