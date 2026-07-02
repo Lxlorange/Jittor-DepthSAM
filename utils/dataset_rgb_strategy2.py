@@ -1,11 +1,14 @@
 import os
 import torch
 from PIL import Image
+from PIL import ImageFile
 import torch.utils.data as data
 import torchvision.transforms as transforms
 import random
 import numpy as np
 from PIL import ImageEnhance, ImageFilter
+
+ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 
 def cv_random_flip(img, label,depth):
