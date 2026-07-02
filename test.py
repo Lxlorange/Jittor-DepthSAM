@@ -8,6 +8,7 @@ import numpy as np
 import cv2
 from segment_anything_training.build_DepthSAM import build_sam_DepthSAM
 from data_cod import test_dataset
+from utils.experiment_monitor import ExperimentMonitor
 from tqdm import tqdm
 
 def get_loader(image_root, gt_root, trainsize):
@@ -36,7 +37,7 @@ def structure_loss(pred, mask):
 
 def get_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--epoch', type=int, default=50, help='epoch number')
+    parser.add_argument('--epoch', type=int, default=200, help='epoch number')
     parser.add_argument('--lr_gen', type=float, default=1e-4, help='learning rate')
     parser.add_argument('--batchsize', type=int, default=1, help='training batch size')
     parser.add_argument('--trainsize', type=int, default=512, help='training dataset size')
@@ -57,9 +58,20 @@ def test():
     dataset_path = './Data_all/COD-D/Test_depth/'
     test_datasets = ['CAMO', 'CHAMELEON', 'COD10K', 'NC4K']
     # test_datasets = ['CAMO']
+    monitor = ExperimentMonitor(
+        "torch_test",
+        config={
+            "framework": "torch",
+            "trainsize": opt.trainsize,
+            "model": "./checkpoints/Model_200_gen.pth",
+            "test_root": dataset_path,
+            "test_datasets": test_datasets,
+            "note": "single-card full-dataset test",
+        },
+    )
     print("开始初始化模型，优化器...")
-    generator = build_sam_DepthSAM()
-    data = torch.load('./checkpoints/Model_COD_gen.pth', map_location='cpu')
+    generator = build_sam_DepthSAM(image_size=opt.trainsize)
+    data = torch.load('./checkpoints/Model_200_gen.pth', map_location='cpu')
     if list(data.keys())[0].startswith('module.'):
         from collections import OrderedDict
         new_state_dict = OrderedDict()
@@ -101,6 +113,7 @@ def test():
 
         with torch.no_grad():
             mae_sum = 0
+            test_count = 0
             for i in tqdm(range(test_loader.size)):
                 image, gt,depth, name, img_for_post = test_loader.load_data()
                 gt = np.asarray(gt, np.float32)
@@ -121,13 +134,24 @@ def test():
 
                 res= F.upsample(res, size=gt.shape, mode='bilinear', align_corners=False)
                 res = res.sigmoid().data.cpu().numpy().squeeze()
+                if np.isnan(res).any():
+                    print(f"Warning: NaN in output for {name}, skipping")
+                    monitor.log_eval_sample(dataset, name, skipped=True)
+                    continue
                 res = (res - res.min()) / (res.max() - res.min() + 1e-8)
 
-                mae_sum += np.sum(np.abs(res - gt)) * 1.0 / (gt.shape[0] * gt.shape[1])
-                cv2.imwrite(save_path + name, res * 255)
-            mae = mae_sum / test_loader.size
+                out_img = (res * 255).clip(0, 255).astype(np.uint8)
+                cv2.imwrite(save_path + name, out_img)
+                sample_mae = np.sum(np.abs(res - gt)) * 1.0 / (gt.shape[0] * gt.shape[1])
+                mae_sum += sample_mae
+                test_count += 1
+                monitor.log_eval_sample(dataset, name, sample_mae)
+                monitor.save_prediction_panel(dataset, name, img_for_post, res, gt)
+            mae = mae_sum / max(test_count, 1)
             print(dataset, 'mae is : ', mae)
+
+    summary = monitor.finish({"mode": "test"})
+    print("Experiment log saved to:", summary["run_dir"])
 
 if __name__ == '__main__':
     test()
-

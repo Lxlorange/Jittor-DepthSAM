@@ -7,6 +7,7 @@ import datetime
 from segment_anything_training.build_DepthSAM import build_sam_DepthSAM
 from utils.dataset_rgb_strategy2 import SalObjDataset
 from utils.utils import adjust_lr, AvgMeter
+from utils.experiment_monitor import ExperimentMonitor
 import torch.nn as nn
 import torch.distributed as dist
 import torch.utils.data as data
@@ -217,7 +218,7 @@ moe_loss_collector = MOELossCollector(alpha=0.01)
 
 def get_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--epoch', type=int, default=300, help='epoch number')
+    parser.add_argument('--epoch', type=int, default=200, help='epoch number')
     parser.add_argument('--lr_gen', type=float, default=5e-5, help='learning rate')
     parser.add_argument('--batchsize', type=int, default=2, help='training batch size')
     parser.add_argument('--trainsize', type=int, default=512, help='training dataset size')
@@ -242,9 +243,22 @@ def train():
                                            trainsize=opt.trainsize, distributed=False)
 
     save_path = './checkpoints/'
+    monitor = ExperimentMonitor(
+        "torch_train",
+        config={
+            "framework": "torch",
+            "epoch": opt.epoch,
+            "lr_gen": opt.lr_gen,
+            "batchsize": opt.batchsize,
+            "trainsize": opt.trainsize,
+            "train_root": image_cod_root,
+            "test_root": "./Data_all/COD-D/Test_depth/",
+            "note": "single-card full-dataset run; recommended as about 2/3 of the original 300-epoch schedule",
+        },
+    )
 
     print("开始初始化模型，优化器...")
-    generator = build_sam_DepthSAM()
+    generator = build_sam_DepthSAM(image_size=opt.trainsize)
     generator.cuda()
     generator_optimizer = torch.optim.Adam(generator.parameters(), opt.lr_gen)
 
@@ -282,6 +296,13 @@ def train():
             generator_optimizer.zero_grad()
 
             loss_record.update(loss.data, opt.batchsize)
+            monitor.log_train_step(
+                epoch,
+                i,
+                total_step,
+                float(loss.detach().item()),
+                generator_optimizer.param_groups[0]['lr'],
+            )
             if i % 200 == 0 or i == total_step:
                 print('{} Epoch [{:03d}/{:03d}], Step [{:04d}/{:04d}], Pre Loss: {:.4f}, Pre1 Loss: {:.4f}'.
                       format(datetime.datetime.now(), epoch, opt.epoch, i, total_step, loss_record.show(), loss1.data))
@@ -292,12 +313,15 @@ def train():
         if epoch >= 10 or epoch % opt.epoch == 0:
             torch.save(generator.state_dict(), save_path + 'Model' + '_%d' % epoch + '_gen.pth')
             w_path = save_path + 'Model_' + str(epoch) + '_gen.pth'
-            test_cod(w_path)
+            test_cod(w_path, monitor)
+
+    summary = monitor.finish({"checkpoint_dir": save_path})
+    print("Experiment log saved to:", summary["run_dir"])
 
 best_mae = 10000
 best_epoch = 0
 
-def test_cod(w_path):
+def test_cod(w_path, monitor=None):
     opt = get_args()
     global best_mae, best_epoch
 
@@ -308,7 +332,7 @@ def test_cod(w_path):
     save_path = './checkpoints/'
     if not os.path.exists(save_path):
         os.makedirs(save_path)
-    generator = build_sam_DepthSAM()
+    generator = build_sam_DepthSAM(image_size=opt.trainsize)
 
     data = torch.load(w_path)
     if list(data.keys())[0].startswith('module.'):
@@ -333,6 +357,7 @@ def test_cod(w_path):
         test_loader = test_dataset(image_root, gt_root, d_root, opt.trainsize)
 
         mae_sum = 0
+        test_count = 0
 
         for i in range(test_loader.size):  # 250
             image, gt, depth, name, image_for_post = test_loader.load_data()
@@ -353,10 +378,22 @@ def test_cod(w_path):
             res = generator(batched_input, image)
             res = F.upsample(res, size=gt.shape, mode='bilinear', align_corners=False)
             res = res.sigmoid().data.cpu().detach().numpy().squeeze()
+            if np.isnan(res).any():
+                print(f"Warning: NaN in output for {name}, skipping")
+                if monitor is not None:
+                    monitor.log_eval_sample(dataset, name, skipped=True)
+                continue
             res = (res - res.min()) / (res.max() - res.min() + 1e-8)
-            mae_sum += np.sum(np.abs(res - gt)) * 1.0 / (gt.shape[0] * gt.shape[1])
+            out_img = (res * 255).clip(0, 255).astype(np.uint8)
+            cv2.imwrite(save_path + name, out_img)
+            sample_mae = np.sum(np.abs(res - gt)) * 1.0 / (gt.shape[0] * gt.shape[1])
+            mae_sum += sample_mae
+            test_count += 1
+            if monitor is not None:
+                monitor.log_eval_sample(dataset, name, sample_mae)
+                monitor.save_prediction_panel(dataset, name, image_for_post, res, gt)
 
-        mae = mae_sum / test_loader.size
+        mae = mae_sum / max(test_count, 1)
 
         print(dataset, 'Res mae is : ', mae)
 
