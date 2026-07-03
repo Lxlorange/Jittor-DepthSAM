@@ -4,6 +4,7 @@ import os
 import time
 
 import jittor as jt
+import jittor.nn as nn
 
 from segment_anything_training.build_DepthSAM import build_sam_DepthSAM
 from train import structure_loss, trainable_parameters
@@ -52,7 +53,8 @@ def run_step(model, optimizer, images, gts, mode, profile):
     batched_input = make_batched_input(images)
 
     if profile == "encoder":
-        pred = model.image_encoder(images)[1][0]
+        encoder_images = nn.interpolate(images, scale_factor=14 / 16, mode="bilinear", align_corners=True)
+        pred = model.image_encoder(encoder_images)[1][0]
         if mode == "train":
             loss = pred.mean()
             optimizer.step(loss)
@@ -60,7 +62,8 @@ def run_step(model, optimizer, images, gts, mode, profile):
         return pred
 
     if profile == "decoder":
-        _, features = model.image_encoder(images)
+        encoder_images = nn.interpolate(images, scale_factor=14 / 16, mode="bilinear", align_corners=True)
+        _, features = model.image_encoder(encoder_images)
         out1, out_1 = model.decoder(features[3], features[2], features[1], features[0])
         pred = out1
         if mode == "train":

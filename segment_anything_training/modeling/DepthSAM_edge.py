@@ -33,13 +33,13 @@ class MOEAdapter(nn.Module):
     def __init__(self, blk, num_experts=8, top_k=2) -> None:
         super(MOEAdapter, self).__init__()
         self.block = blk
-        self.num_experts = num_experts
-        self.top_k = top_k
+        self.num_experts = max(1, int(os.environ.get("DEPTHSAM_MOE_EXPERTS", num_experts)))
+        self.top_k = min(top_k, self.num_experts)
 
         dim = blk.attn.qkv.in_features
 
         # 门控网络
-        self.gate = nn.Linear(dim, num_experts)
+        self.gate = nn.Linear(dim, self.num_experts)
 
         # 多个专家网络
         self.experts = nn.ModuleList([
@@ -48,7 +48,7 @@ class MOEAdapter(nn.Module):
                 nn.GELU(),
                 nn.Linear(32, dim),
                 nn.GELU(),
-            ) for _ in range(num_experts)
+            ) for _ in range(self.num_experts)
         ])
 
     def execute(self, x):
@@ -60,23 +60,13 @@ class MOEAdapter(nn.Module):
         gate_logits = self.gate(x_flat)  # (B*H*W, num_experts)
         gate_weights = nn.softmax(gate_logits, dim=-1)
 
-        top_k_weights, top_k_indices = jt.topk(gate_weights, self.top_k, dim=-1)
-        top_k_weights = top_k_weights / (top_k_weights.sum(dim=-1, keepdim=True) + 1e-8)
+        # Dense routing avoids Jittor top-k/where crashes and keeps every expert trainable.
+        expert_outputs = []
+        for e_idx in range(self.num_experts):
+            expert_outputs.append(self.experts[e_idx](x_flat))
+        expert_outputs = jt.stack(expert_outputs, dim=1)
 
-        output = jt.zeros_like(x_flat)
-        token_indices = jt.arange(x_flat.shape[0])
-        for i in range(self.top_k):
-            expert_idx = top_k_indices[:, i]
-            expert_weight = top_k_weights[:, i].unsqueeze(-1)
-            for e_idx in range(self.num_experts):
-                selected = jt.nonzero(expert_idx == e_idx).reshape(-1)
-                if selected.shape[0] == 0:
-                    continue
-                expert_input = x_flat[selected]
-                expert_output = self.experts[e_idx](expert_input)
-                expert_output = expert_output * expert_weight[selected]
-                jt.misc.index_add_(output, 0, token_indices[selected], expert_output)
-
+        output = jt.sum(expert_outputs * gate_weights.unsqueeze(-1), dims=[1])
         output = output.reshape(B, N, C)
         prompted = x + output
         return self.block(prompted)
