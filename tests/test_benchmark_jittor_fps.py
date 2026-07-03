@@ -1,0 +1,107 @@
+import argparse
+import json
+import os
+import time
+
+import jittor as jt
+
+from segment_anything_training.build_DepthSAM import build_sam_DepthSAM
+from train import structure_loss, trainable_parameters
+from utils.jittor_runtime import configure_jittor_runtime, print_runtime_hints, sync_gc
+
+
+def get_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--mode", choices=["forward", "train"], default="train")
+    parser.add_argument("--batchsize", type=int, default=2)
+    parser.add_argument("--trainsize", type=int, default=384)
+    parser.add_argument("--warmup", type=int, default=5)
+    parser.add_argument("--iters", type=int, default=30)
+    parser.add_argument("--lr", type=float, default=5e-5)
+    parser.add_argument("--output", default="")
+    return parser.parse_args()
+
+
+def make_batched_input(images):
+    batched_input = []
+    for b_i in range(images.shape[0]):
+        input_image = images[b_i]
+        batched_input.append(
+            {
+                "image": input_image,
+                "original_size": (input_image.shape[1], input_image.shape[2]),
+            }
+        )
+    return batched_input
+
+
+def sync():
+    try:
+        jt.sync_all(True)
+    except TypeError:
+        jt.sync_all()
+
+
+def peak_memory_mb():
+    try:
+        used = jt.flags.stat_allocator_total_alloc_byte
+        return round(float(used) / 1024 / 1024, 2)
+    except Exception:
+        return None
+
+
+def run_step(model, optimizer, images, gts, mode):
+    batched_input = make_batched_input(images)
+    pred = model(batched_input, images)
+    if mode == "train":
+        loss = structure_loss(pred, gts)
+        optimizer.step(loss)
+        return loss
+    return pred
+
+
+def main():
+    args = get_args()
+    configure_jittor_runtime()
+    print_runtime_hints()
+
+    model = build_sam_DepthSAM(image_size=args.trainsize)
+    model.train()
+    optimizer = jt.optim.Adam(trainable_parameters(model), args.lr)
+
+    images = jt.randn((args.batchsize, 3, args.trainsize, args.trainsize))
+    gts = jt.rand((args.batchsize, 1, args.trainsize, args.trainsize))
+    sync()
+
+    for _ in range(args.warmup):
+        run_step(model, optimizer, images, gts, args.mode)
+    sync()
+    sync_gc()
+
+    start = time.perf_counter()
+    for _ in range(args.iters):
+        run_step(model, optimizer, images, gts, args.mode)
+    sync()
+    elapsed = time.perf_counter() - start
+
+    samples = args.batchsize * args.iters
+    result = {
+        "framework": "jittor",
+        "mode": args.mode,
+        "batchsize": args.batchsize,
+        "trainsize": args.trainsize,
+        "warmup": args.warmup,
+        "iters": args.iters,
+        "elapsed_sec": elapsed,
+        "fps": samples / elapsed,
+        "ms_per_iter": elapsed * 1000 / args.iters,
+        "peak_memory_mb": peak_memory_mb(),
+    }
+    print(json.dumps(result, indent=2))
+    if args.output:
+        with open(args.output, "w", encoding="utf-8") as f:
+            json.dump(result, f, indent=2)
+
+
+if __name__ == "__main__":
+    main()

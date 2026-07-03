@@ -9,7 +9,8 @@ def configure_jittor_runtime():
     jt.flags.use_cuda = 1
     if hasattr(jt, "cudnn"):
         try:
-            jt.cudnn.set_max_workspace_ratio(0.0)
+            workspace_ratio = float(os.environ.get("JT_CUDNN_WORKSPACE_RATIO", "0.5"))
+            jt.cudnn.set_max_workspace_ratio(workspace_ratio)
         except Exception:
             pass
 
@@ -28,7 +29,8 @@ def print_runtime_hints():
         "Jittor memory config: "
         f"JT_SAVE_MEM={os.environ.get('JT_SAVE_MEM')}, "
         f"cpu_mem_limit={os.environ.get('cpu_mem_limit')}, "
-        f"device_mem_limit={os.environ.get('device_mem_limit')}"
+        f"device_mem_limit={os.environ.get('device_mem_limit')}, "
+        f"JT_CUDNN_WORKSPACE_RATIO={os.environ.get('JT_CUDNN_WORKSPACE_RATIO', '0.5')}"
     )
 
 
