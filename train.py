@@ -238,13 +238,14 @@ def train():
                 dict_input['original_size'] = (input_image.shape[1], input_image.shape[2])
                 batched_input.append(dict_input)
 
-            with optional_memory_profile(profile_memory and epoch == 1 and i == 1):
+            do_memory_profile = profile_memory and epoch == 1 and i == 1
+            with optional_memory_profile(do_memory_profile):
                 s1 = generator(batched_input, images)
                 loss1 = structure_loss(s1, gts)
                 loss = loss1
 
-            generator_optimizer.step(loss)
-            maybe_print_memory_profile(profile_memory and epoch == 1 and i == 1)
+                generator_optimizer.step(loss)
+                maybe_print_memory_profile(do_memory_profile)
 
             should_log = i == 1 or i % opt.log_interval == 0 or i == total_step
             if should_log:

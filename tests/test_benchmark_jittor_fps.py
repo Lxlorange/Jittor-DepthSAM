@@ -116,7 +116,7 @@ def main():
         with optional_memory_profile(True):
             run_step(model, optimizer, images, gts, args.mode, args.profile)
             sync()
-        maybe_print_memory_profile(True)
+            maybe_print_memory_profile(True)
         sync()
 
     start = time.perf_counter()
