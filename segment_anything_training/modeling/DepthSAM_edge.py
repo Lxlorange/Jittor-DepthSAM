@@ -60,23 +60,13 @@ class MOEAdapter(nn.Module):
         gate_logits = self.gate(x_flat)  # (B*H*W, num_experts)
         gate_weights = nn.softmax(gate_logits, dim=-1)
 
-        # 选择top-k专家
-        top_k_weights, top_k_indices = jt.topk(gate_weights, self.top_k, dim=-1)
-        top_k_weights = top_k_weights / top_k_weights.sum(dim=-1, keepdim=True)
-
+        # Dense routing avoids Jittor top-k/where crashes and keeps every expert trainable.
         expert_outputs = []
         for e_idx in range(self.num_experts):
             expert_outputs.append(self.experts[e_idx](x_flat))
         expert_outputs = jt.stack(expert_outputs, dim=1)
 
-        expert_ids = jt.arange(self.num_experts).unsqueeze(0)
-        expert_mix_weights = jt.zeros_like(gate_weights)
-        for i in range(self.top_k):
-            top_i_indices = top_k_indices[:, i].unsqueeze(-1)
-            top_i_weights = top_k_weights[:, i].unsqueeze(-1)
-            expert_mix_weights += (top_i_indices == expert_ids) * top_i_weights
-
-        output = jt.sum(expert_outputs * expert_mix_weights.unsqueeze(-1), dims=[1])
+        output = jt.sum(expert_outputs * gate_weights.unsqueeze(-1), dims=[1])
         output = output.reshape(B, N, C)
         prompted = x + output
         return self.block(prompted)
@@ -130,6 +120,11 @@ class EdgeDepthSAM(nn.Module):
         self.image_encoder.pretrained.blocks = nn.Sequential(
             *blocks
         )
+        for block in self.image_encoder.pretrained.blocks:
+            for param in block.gate.parameters():
+                param.requires_grad = True
+            for param in block.experts.parameters():
+                param.requires_grad = True
 
         self.prompt_encoder = prompt_encoder
         self.mask_decoder = mask_decoder
@@ -207,8 +202,6 @@ class EdgeDepthSAM(nn.Module):
         x = nn.interpolate(x, scale_factor=14 / 16, mode='bilinear', align_corners=True)
 
         depth,features = self.image_encoder(x)
-        if not self.training:
-            features = [feature.detach() for feature in features]
 
         out1,out_1 = self.decoder(features[3], features[2], features[1], features[0])
         outputs = []
