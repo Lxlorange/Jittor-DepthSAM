@@ -1,9 +1,8 @@
 import argparse
 import os
 # os.environ["CUDA_VISIBLE_DEVICES"] = "3"
-os.environ.setdefault("JT_SAVE_MEM", "1")
 os.environ.setdefault("cpu_mem_limit", "-1")
-os.environ.setdefault("device_mem_limit", "20000000000")
+os.environ.setdefault("device_mem_limit", "-1")
 import jittor as jt
 import jittor.nn as nn
 import numpy as np

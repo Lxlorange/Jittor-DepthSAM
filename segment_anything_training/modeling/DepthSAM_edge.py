@@ -62,31 +62,24 @@ class MOEAdapter(nn.Module):
 
         # 选择top-k专家
         top_k_weights, top_k_indices = jt.topk(gate_weights, self.top_k, dim=-1)
-        top_k_weights = top_k_weights / top_k_weights.sum(dim=-1, keepdim=True)  # 归一化
+        top_k_weights = top_k_weights / top_k_weights.sum(dim=-1, keepdim=True)
 
-        # 混合专家输出
-        output = jt.zeros_like(x_flat)
+        expert_outputs = []
+        for e_idx in range(self.num_experts):
+            expert_outputs.append(self.experts[e_idx](x_flat))
+        expert_outputs = jt.stack(expert_outputs, dim=1)
+
+        expert_ids = jt.arange(self.num_experts).unsqueeze(0)
+        expert_mix_weights = jt.zeros_like(gate_weights)
         for i in range(self.top_k):
-            expert_idx = top_k_indices[:, i]
-            expert_weight = top_k_weights[:, i].unsqueeze(-1)
+            top_i_indices = top_k_indices[:, i].unsqueeze(-1)
+            top_i_weights = top_k_weights[:, i].unsqueeze(-1)
+            expert_mix_weights += (top_i_indices == expert_ids) * top_i_weights
 
-            # 对每个专家进行前向传播
-            for e_idx in range(self.num_experts):
-                mask = (expert_idx == e_idx)
-                if mask.any():
-                    expert_input = x_flat[mask]
-                    expert_output = self.experts[e_idx](expert_input)
-                    output[mask] += expert_weight[mask] * expert_output
-
-        # 恢复原始形状
+        output = jt.sum(expert_outputs * expert_mix_weights.unsqueeze(-1), dims=[1])
         output = output.reshape(B, N, C)
-
-        # 残差连接
         prompted = x + output
-
-        # 通过原始block
-        net = self.block(prompted)
-        return net
+        return self.block(prompted)
 
 class EdgeDepthSAM(nn.Module):
     mask_threshold: float = 0.0
@@ -145,6 +138,16 @@ class EdgeDepthSAM(nn.Module):
 
         self.register_buffer("pixel_mean", jt.Var(pixel_mean).view(-1, 1, 1), False)
         self.register_buffer("pixel_std", jt.Var(pixel_std).view(-1, 1, 1), False)
+        self.pixel_mean.requires_grad = False
+        self.pixel_std.requires_grad = False
+        for param in self.prompt_encoder.point_embeddings.parameters():
+            param.requires_grad = False
+        for param in self.prompt_encoder.not_a_point_embed.parameters():
+            param.requires_grad = False
+        for param in self.prompt_encoder.no_mask_embed.parameters():
+            param.requires_grad = False
+        for param in self.prompt_encoder.pe_layer_2.parameters():
+            param.requires_grad = False
 
     def _set_prompt_encoder_size(self, embedding):
         image_embedding_size = tuple(embedding.shape[-2:])
@@ -204,9 +207,8 @@ class EdgeDepthSAM(nn.Module):
         x = nn.interpolate(x, scale_factor=14 / 16, mode='bilinear', align_corners=True)
 
         depth,features = self.image_encoder(x)
-        # Test-only memory cut: the DepthAnything backbone is frozen, so avoid
-        # storing its backward graph on small GPUs.
-        features = [feature.detach() for feature in features]
+        if not self.training:
+            features = [feature.detach() for feature in features]
 
         out1,out_1 = self.decoder(features[3], features[2], features[1], features[0])
         outputs = []

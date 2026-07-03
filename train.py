@@ -1,9 +1,8 @@
 import argparse
 import os
 # os.environ["CUDA_VISIBLE_DEVICES"] = "2"
-os.environ.setdefault("JT_SAVE_MEM", "1")
 os.environ.setdefault("cpu_mem_limit", "-1")
-os.environ.setdefault("device_mem_limit", "20000000000")
+os.environ.setdefault("device_mem_limit", "-1")
 import cv2
 import jittor as jt
 import datetime
@@ -131,6 +130,10 @@ def load_state_dict_npz(path):
     return {key: jt.array(data[key]) for key in data.files}
 
 
+def trainable_parameters(model):
+    return [param for param in model.parameters() if getattr(param, "requires_grad", True)]
+
+
 
 
 def get_args():
@@ -179,7 +182,7 @@ def train():
 
     print("开始初始化模型，优化器...")
     generator = build_sam_DepthSAM(image_size=opt.trainsize)
-    generator_optimizer = jt.optim.Adam(generator.parameters(), opt.lr_gen)
+    generator_optimizer = jt.optim.Adam(trainable_parameters(generator), opt.lr_gen)
 
     total_step = len(train_loader)
     last_w_path = None
