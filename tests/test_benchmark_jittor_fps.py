@@ -7,7 +7,7 @@ import jittor as jt
 
 from segment_anything_training.build_DepthSAM import build_sam_DepthSAM
 from train import structure_loss, trainable_parameters
-
+from utils.jittor_runtime import configure_jittor_runtime,print_runtime_hints
 
 def get_args():
     parser = argparse.ArgumentParser()
@@ -49,19 +49,22 @@ def peak_memory_mb():
 
 def run_step(model, optimizer, images, gts, mode):
     batched_input = make_batched_input(images)
+    
+    if mode == "forward":
+        with jt.no_grad():
+            pred = model(batched_input, images)
+        return pred
+    
     pred = model(batched_input, images)
-    if mode == "train":
-        loss = structure_loss(pred, gts)
-        optimizer.step(loss)
-        return loss
-    return pred
+    loss = structure_loss(pred, gts)
+    optimizer.step(loss)
+    return loss
 
 
 def main():
     args = get_args()
-    jt.flags.use_cuda = 1
-    if args.mode == "forward":
-        jt.set_grad_flag(False)
+    configure_jittor_runtime()
+    print_runtime_hints()
 
     model = build_sam_DepthSAM(image_size=args.trainsize)
     model.train() if args.mode == "train" else model.eval()
