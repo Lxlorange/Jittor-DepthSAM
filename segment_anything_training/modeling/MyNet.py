@@ -207,23 +207,23 @@ class Attention_SD(nn.Module):
         return out
 
 class FM(nn.Module):
-    def __init__(self, dim,oup):
+    def __init__(self, dim,oup,use_attention=True):
         super(FM, self).__init__()
         self.dim = oup
         self.conv_n = BasicConv2d(dim, self.dim, kernel_size=1, stride=1)
-        self.asd = Attention_SD(self.dim)
+        self.asd = Attention_SD(self.dim) if use_attention else None
         self.ddd = DWConv(self.dim)
 
     def execute(self,x):
         x = self.conv_n(x)
-        out = self.asd(x,x)
+        out = self.asd(x,x) if self.asd is not None else x
         out = self.ddd(out)
         return out
 
 class MEF(nn.Module):
-    def __init__(self, in1,in2):
+    def __init__(self, in1,in2,use_attention=True):
         super(MEF, self).__init__()
-        self.fm = FM(in1 + in1,in1)
+        self.fm = FM(in1 + in1,in1,use_attention=use_attention)
         self.fm1 = nn.Sequential(
             nn.ConvTranspose2d(in2, in1, kernel_size=2, stride=2),
             LayerNorm2d(in1),
@@ -264,7 +264,7 @@ class Decode(nn.Module):
         )
 
 
-        self.fm1 = MEF(in1,in2)
+        self.fm1 = MEF(in1,in2,use_attention=False)
         self.fm2 = MEF(in2,in3)
         self.fm3 = MEF(in3,in4)
     def execute(self,x1,x2,x3,x4):
