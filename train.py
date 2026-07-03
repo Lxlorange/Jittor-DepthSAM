@@ -172,12 +172,17 @@ def train():
     for epoch in range(1, opt.epoch + 1):
         generator.train()
         loss_record = AvgMeter()
-        print('Learning Rate: {}'.format(getattr(generator_optimizer, 'lr', opt.lr_gen)))
+        current_lr = getattr(generator_optimizer, 'lr', opt.lr_gen)
+        print('Epoch [{:03d}/{:03d}] Learning Rate: {}'.format(epoch, opt.epoch, current_lr))
 
-        train_loader_iter = iter(train_loader)
+        train_loader_iter = tqdm(
+            train_loader,
+            total=total_step,
+            desc='Train Epoch {:03d}/{:03d}'.format(epoch, opt.epoch),
+            ncols=120,
+        )
 
-        for i, (images, gts, depth) in enumerate(train_loader_iter):
-            print(f"Step {i}: images type={type(images)}, shape={images.shape if hasattr(images, 'shape') else 'N/A'}")
+        for i, (images, gts, depth) in enumerate(train_loader_iter, start=1):
             # 从 numpy 统一转成 jittor Var
             images = jt.array(images)
             gts = jt.array(gts)
@@ -204,17 +209,28 @@ def train():
 
             generator_optimizer.step(loss)
 
-            loss_record.update(loss, opt.batchsize)
+            loss_value = float(loss.item())
+            loss1_value = float(loss1.item())
+            loss_record.update(loss_value, opt.batchsize)
             monitor.log_train_step(
                 epoch,
                 i,
                 total_step,
-                float(loss.item()),
-                getattr(generator_optimizer, 'lr', opt.lr_gen),
+                loss_value,
+                current_lr,
             )
-            if i % 200 == 0 or i == total_step:
-                print('{} Epoch [{:03d}/{:03d}], Step [{:04d}/{:04d}], Pre Loss: {:.4f}, Pre1 Loss: {:.4f}'.
-                      format(datetime.datetime.now(), epoch, opt.epoch, i, total_step, loss_record.show(), float(loss1.item())))
+            train_loader_iter.set_postfix(
+                loss='{:.4f}'.format(loss_value),
+                avg='{:.4f}'.format(float(loss_record.show())),
+                lr=current_lr,
+            )
+            if i % 50 == 0 or i == total_step:
+                tqdm.write('{} Epoch [{:03d}/{:03d}], Step [{:04d}/{:04d}], Pre Loss: {:.4f}, Pre1 Loss: {:.4f}'.
+                           format(datetime.datetime.now(), epoch, opt.epoch, i, total_step,
+                                  float(loss_record.show()), loss1_value))
+
+        print('{} Epoch [{:03d}/{:03d}] Finished, Avg Loss: {:.4f}'.
+              format(datetime.datetime.now(), epoch, opt.epoch, float(loss_record.show())))
 
         if not os.path.exists(save_path):
             os.makedirs(save_path)

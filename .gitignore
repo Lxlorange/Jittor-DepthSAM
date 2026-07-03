@@ -13,7 +13,7 @@ assets/test_predictions/
 *.pth
 *.pkl
 *.npy
-
+*.tar
 # VSCode
 .vscode/
 

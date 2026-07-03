@@ -72,4 +72,4 @@ class AvgMeter(object):
         #print(c)
         #d = torch.mean(torch.stack(c))
         #print(d)
-        return jt.mean(jt.stack(c))
+        return np.mean(c)
