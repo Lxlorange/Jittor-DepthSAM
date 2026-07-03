@@ -1,4 +1,5 @@
 import argparse
+import math
 import os
 # os.environ["CUDA_VISIBLE_DEVICES"] = "2"
 os.environ.setdefault("cpu_mem_limit", "-1")
@@ -199,7 +200,8 @@ def train():
     generator = build_sam_DepthSAM(image_size=opt.trainsize)
     generator_optimizer = jt.optim.Adam(trainable_parameters(generator), opt.lr_gen)
 
-    total_step = len(train_loader)
+    sample_count = getattr(train_loader, "total_len", len(train_loader))
+    total_step = math.ceil(sample_count / opt.batchsize)
     last_w_path = None
     print("Start Training...")
     for epoch in range(1, opt.epoch + 1):
