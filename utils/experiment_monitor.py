@@ -134,7 +134,9 @@ class ExperimentMonitor:
         h, w = pred_img.shape[:2]
         image = cv2.resize(image, (w, h))
         panel = np.concatenate([image, pred_img, gt_img], axis=1)
-        cv2.imwrite(os.path.join(out_dir, name), panel)
+        out_path = os.path.join(out_dir, name)
+        if not cv2.imwrite(out_path, panel):
+            print(f"Warning: failed to write prediction panel: {out_path}")
 
     def save_loss_curve(self):
         if not self.loss_steps:

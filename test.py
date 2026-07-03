@@ -1,6 +1,9 @@
 import argparse
 import os
 # os.environ["CUDA_VISIBLE_DEVICES"] = "3"
+os.environ.setdefault("JT_SAVE_MEM", "1")
+os.environ.setdefault("cpu_mem_limit", "-1")
+os.environ.setdefault("device_mem_limit", "20000000000")
 import jittor as jt
 import jittor.nn as nn
 import numpy as np
@@ -8,6 +11,7 @@ import cv2
 from segment_anything_training.build_DepthSAM import build_sam_DepthSAM
 from data_cod import test_dataset
 from utils.experiment_monitor import ExperimentMonitor
+from utils.jittor_runtime import configure_jittor_runtime, print_runtime_hints, sync_gc
 from tqdm import tqdm
 
 def get_args():
@@ -27,7 +31,8 @@ def get_args():
 opt = get_args()
 
 print('USE GPU', opt.gpu)
-jt.flags.use_cuda = 1
+configure_jittor_runtime()
+print_runtime_hints()
 
 def test():
 
@@ -58,6 +63,7 @@ def test():
         generator.load_state_dict(data)
 
     generator.train()
+    sync_gc()
     for dataset in test_datasets:
         save_path = './test_maps/' + dataset + '/'
         if not os.path.exists(save_path):
@@ -99,17 +105,22 @@ def test():
             if np.isnan(res).any():
                 print(f"Warning: NaN in output for {name}, skipping")
                 monitor.log_eval_sample(dataset, name, skipped=True)
+                del image, gt, depth, batched_input, res
+                sync_gc()
                 continue
             res = (res - res.min()) / (res.max() - res.min() + 1e-8)
             out_img = (res * 255).clip(0, 255).astype(np.uint8)
-            cv2.imwrite(save_path + name, out_img)
+            if not cv2.imwrite(save_path + name, out_img):
+                print(f"Warning: failed to write prediction for {name}")
             sample_mae = np.sum(np.abs(res - gt)) * 1.0 / (gt.shape[-2] * gt.shape[-1])
             mae_sum += sample_mae
             test_count += 1
             monitor.log_eval_sample(dataset, name, sample_mae)
             monitor.save_prediction_panel(dataset, name, img_for_post, res, gt)
+            del image, gt, depth, batched_input, res, out_img
+            sync_gc()
 
-        mae = mae_sum / test_count
+        mae = mae_sum / max(test_count, 1)
         print(dataset, 'mae is : ', mae)
 
     summary = monitor.finish({"mode": "test"})

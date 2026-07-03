@@ -1,6 +1,9 @@
 import argparse
 import os
 # os.environ["CUDA_VISIBLE_DEVICES"] = "2"
+os.environ.setdefault("JT_SAVE_MEM", "1")
+os.environ.setdefault("cpu_mem_limit", "-1")
+os.environ.setdefault("device_mem_limit", "20000000000")
 import cv2
 import jittor as jt
 import datetime
@@ -8,6 +11,13 @@ from segment_anything_training.build_DepthSAM import build_sam_DepthSAM
 from utils.dataset_rgb_strategy2 import SalObjDataset
 from utils.utils import AvgMeter
 from utils.experiment_monitor import ExperimentMonitor
+from utils.jittor_runtime import (
+    configure_jittor_runtime,
+    maybe_print_memory_profile,
+    optional_memory_profile,
+    print_runtime_hints,
+    sync_gc,
+)
 import jittor.nn as nn
 # import jittor.distributed as dist
 import numpy as np
@@ -112,6 +122,8 @@ def save_state_dict_npz(state_dict, path):
         else:
             np_state[key] = np.asarray(value)
     np.savez(path, **np_state)
+    del np_state
+    sync_gc()
 
 
 def load_state_dict_npz(path):
@@ -139,7 +151,9 @@ def get_args():
 
 def train():
     opt = get_args()
-    jt.flags.use_cuda = 1
+    configure_jittor_runtime()
+    print_runtime_hints()
+    profile_memory = os.environ.get("JT_PROFILE_MEMORY", "0") == "1"
 
     image_cod_root = "./Data_all/COD-D/Train_depth/Imgs/"
     gt_cod_root = "./Data_all/COD-D/Train_depth/GT/"
@@ -203,11 +217,13 @@ def train():
                 dict_input['original_size'] = (input_image.shape[1], input_image.shape[2])
                 batched_input.append(dict_input)
 
-            s1 = generator(batched_input, images)
-            loss1 = structure_loss(s1, gts)
-            loss = loss1
+            with optional_memory_profile(profile_memory and epoch == 1 and i == 1):
+                s1 = generator(batched_input, images)
+                loss1 = structure_loss(s1, gts)
+                loss = loss1
 
             generator_optimizer.step(loss)
+            maybe_print_memory_profile(profile_memory and epoch == 1 and i == 1)
 
             loss_value = float(loss.item())
             loss1_value = float(loss1.item())
@@ -228,9 +244,12 @@ def train():
                 tqdm.write('{} Epoch [{:03d}/{:03d}], Step [{:04d}/{:04d}], Pre Loss: {:.4f}, Pre1 Loss: {:.4f}'.
                            format(datetime.datetime.now(), epoch, opt.epoch, i, total_step,
                                   float(loss_record.show()), loss1_value))
+                sync_gc()
+            del images, gts, depth, batched_input, s1, loss1, loss
 
         print('{} Epoch [{:03d}/{:03d}] Finished, Avg Loss: {:.4f}'.
               format(datetime.datetime.now(), epoch, opt.epoch, float(loss_record.show())))
+        sync_gc()
 
         if not os.path.exists(save_path):
             os.makedirs(save_path)
@@ -238,7 +257,9 @@ def train():
         if epoch >= 10 or epoch % opt.epoch == 0:
             w_path = save_path + 'Model_' + str(epoch) + '_gen.npz'
             save_state_dict_npz(generator.state_dict(), w_path)
+            sync_gc()
             test_cod(w_path, generator, monitor)
+            sync_gc()
 
     summary = monitor.finish({"checkpoint_dir": save_path})
     print("Experiment log saved to:", summary["run_dir"])
@@ -248,6 +269,7 @@ best_epoch = 0
 
 def test_cod(w_path, generator=None, monitor=None):
     opt = get_args()
+    configure_jittor_runtime()
     global best_mae, best_epoch
 
     test_path = './Data_all/COD-D/Test_depth/'
@@ -273,6 +295,7 @@ def test_cod(w_path, generator=None, monitor=None):
 
     # generator.eval() #不知道为啥会让res变Nan
     generator.train()
+    sync_gc()
     for dataset in test_datasets:
         save_path = './test_maps/' + dataset + '/'
         if not os.path.exists(save_path):
@@ -312,16 +335,21 @@ def test_cod(w_path, generator=None, monitor=None):
                 print(f"Warning: NaN in output for {name}, skipping")
                 if monitor is not None:
                     monitor.log_eval_sample(dataset, name, skipped=True)
+                del image, gt, depth, batched_input, res
+                sync_gc()
                 continue
             res = (res - res.min()) / (res.max() - res.min() + 1e-8)
             out_img = (res * 255).clip(0, 255).astype(np.uint8)
-            cv2.imwrite(save_path + name, out_img)
+            if not cv2.imwrite(save_path + name, out_img):
+                print(f"Warning: failed to write prediction for {name}")
             sample_mae = np.sum(np.abs(res - gt)) * 1.0 / (gt.shape[-2] * gt.shape[-1])
             mae_sum += sample_mae
             test_count += 1
             if monitor is not None:
                 monitor.log_eval_sample(dataset, name, sample_mae)
                 monitor.save_prediction_panel(dataset, name, image_for_post, res, gt)
+            del image, gt, depth, batched_input, res, out_img
+            sync_gc()
 
         mae = mae_sum / max(test_count, 1)
 
