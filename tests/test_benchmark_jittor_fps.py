@@ -68,7 +68,11 @@ def main():
 
     model = build_sam_DepthSAM(image_size=args.trainsize)
     model.train() if args.mode == "train" else model.eval()
-    optimizer = jt.optim.Adam(trainable_parameters(model), args.lr)
+    optimizer = None
+    if args.mode == "train":
+        params = trainable_parameters(model)
+        assert len(params) > 0, "No trainable parameters found! Check requires_grad settings."
+        optimizer = jt.optim.Adam(params, args.lr)
 
     images = jt.randn((args.batchsize, 3, args.trainsize, args.trainsize))
     gts = jt.rand((args.batchsize, 1, args.trainsize, args.trainsize))
