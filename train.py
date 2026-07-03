@@ -182,6 +182,7 @@ def train():
     generator_optimizer = jt.optim.Adam(generator.parameters(), opt.lr_gen)
 
     total_step = len(train_loader)
+    last_w_path = None
     print("Start Training...")
     for epoch in range(1, opt.epoch + 1):
         generator.train()
@@ -260,6 +261,9 @@ def train():
             sync_gc()
             test_cod(w_path, generator, monitor)
             sync_gc()
+            if last_w_path is not None and last_w_path != w_path and os.path.exists(last_w_path):
+                os.remove(last_w_path)
+            last_w_path = w_path
 
     summary = monitor.finish({"checkpoint_dir": save_path})
     print("Experiment log saved to:", summary["run_dir"])
