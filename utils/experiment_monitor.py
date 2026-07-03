@@ -21,6 +21,8 @@ class ExperimentMonitor:
         self.loss_values = []
         self.peak_gpu_mem_mb = 0
         self.peak_gpu_util = 0
+        self.gpu_sample_interval = max(1, int(os.environ.get("MONITOR_GPU_INTERVAL", "50")))
+        self._last_gpu = {"mem_used_mb": "", "mem_total_mb": "", "util": ""}
 
         if config is not None:
             self.write_json("config.json", config)
@@ -71,7 +73,9 @@ class ExperimentMonitor:
             return {"mem_used_mb": "", "mem_total_mb": "", "util": ""}
 
     def log_train_step(self, epoch, step, total_step, loss, lr):
-        gpu = self.gpu_snapshot()
+        if step == 1 or step == total_step or step % self.gpu_sample_interval == 0:
+            self._last_gpu = self.gpu_snapshot()
+        gpu = self._last_gpu
         loss_value = float(loss)
         global_step = (epoch - 1) * total_step + step
         self.loss_steps.append(global_step)

@@ -229,6 +229,8 @@ def get_args():
     parser.add_argument('--weight_decay', type=float, default=0, help='weight_decay')
     parser.add_argument('--feat_channel', type=int, default=64, help='reduced channel of saliency feat')
     parser.add_argument('--gpu', type=int, default='0', help='reduced channel of saliency feat')
+    parser.add_argument('--log_interval', type=int, default=50, help='steps between scalar loss logging')
+    parser.add_argument('--sync_interval', type=int, default=200, help='steps between explicit CUDA sync calls')
     return parser.parse_args()
 
 
@@ -251,6 +253,8 @@ def train():
             "lr_gen": opt.lr_gen,
             "batchsize": opt.batchsize,
             "trainsize": opt.trainsize,
+            "log_interval": opt.log_interval,
+            "sync_interval": opt.sync_interval,
             "train_root": image_cod_root,
             "test_root": "./Data_all/COD-D/Test_depth/",
             "note": "single-card full-dataset run; recommended as about 2/3 of the original 300-epoch schedule",
@@ -269,6 +273,8 @@ def train():
         loss_record = AvgMeter()
         current_lr = generator_optimizer.param_groups[0]['lr']
         print('Epoch [{:03d}/{:03d}] Learning Rate: {}'.format(epoch, opt.epoch, current_lr))
+        last_loss_value = None
+        last_loss1_value = None
 
         train_loader_iter = tqdm(
             train_loader,
@@ -301,23 +307,29 @@ def train():
             generator_optimizer.step()
             generator_optimizer.zero_grad()
 
-            loss_record.update(loss.data, opt.batchsize)
-            monitor.log_train_step(
-                epoch,
-                i,
-                total_step,
-                float(loss.detach().item()),
-                current_lr,
-            )
-            train_loader_iter.set_postfix(
-                loss='{:.4f}'.format(float(loss.detach().item())),
-                avg='{:.4f}'.format(float(loss_record.show())),
-                lr=current_lr,
-            )
-            if i % 50 == 0 or i == total_step:
+            should_log = i == 1 or i % opt.log_interval == 0 or i == total_step
+            if should_log:
+                last_loss_value = float(loss.detach().item())
+                last_loss1_value = float(loss1.detach().item())
+                loss_record.update(loss.detach(), opt.batchsize)
+                monitor.log_train_step(
+                    epoch,
+                    i,
+                    total_step,
+                    last_loss_value,
+                    current_lr,
+                )
+                train_loader_iter.set_postfix(
+                    loss='{:.4f}'.format(last_loss_value),
+                    avg='{:.4f}'.format(float(loss_record.show())),
+                    lr=current_lr,
+                )
+            if should_log:
                 tqdm.write('{} Epoch [{:03d}/{:03d}], Step [{:04d}/{:04d}], Pre Loss: {:.4f}, Pre1 Loss: {:.4f}'.
                            format(datetime.datetime.now(), epoch, opt.epoch, i, total_step,
-                                  float(loss_record.show()), float(loss1.detach().item())))
+                                  float(loss_record.show()), last_loss1_value))
+            if torch.cuda.is_available() and (i % opt.sync_interval == 0 or i == total_step):
+                torch.cuda.synchronize()
 
         print('{} Epoch [{:03d}/{:03d}] Finished, Avg Loss: {:.4f}'.
               format(datetime.datetime.now(), epoch, opt.epoch, float(loss_record.show())))
