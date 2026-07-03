@@ -46,8 +46,9 @@ def _complex(x):
     return nn.ComplexNumber(x, jt.zeros_like(x))
 
 
-def _complex_abs(x):
-    return _complex(x).norm()
+def _complex_abs(x, eps=1e-12):
+    x = _complex(x)
+    return (x.real * x.real + x.imag * x.imag + eps).sqrt()
 
 
 def _complex_real(x):
@@ -98,10 +99,10 @@ def _merge_heads(x, head, h, w):
 
 def _normalize(x, dim=-1, eps=1e-12):
     if isinstance(x, nn.ComplexNumber):
-        denom = (x.norm() * x.norm()).sum(dim, keepdims=True).sqrt() + eps
+        denom = ((x.real * x.real + x.imag * x.imag).sum(dim, keepdims=True) + eps).sqrt()
         return nn.ComplexNumber(x.real / denom, x.imag / denom)
 
-    denom = (x * x).sum(dim, keepdims=True).sqrt() + eps
+    denom = ((x * x).sum(dim, keepdims=True) + eps).sqrt()
     return x / denom
 
 

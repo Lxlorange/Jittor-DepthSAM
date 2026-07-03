@@ -33,6 +33,18 @@ print('USE GPU', opt.gpu)
 configure_jittor_runtime()
 print_runtime_hints()
 
+
+def normalize_map(res):
+    if not np.isfinite(res).all():
+        return None
+    res_min = res.min()
+    res_max = res.max()
+    denom = res_max - res_min
+    if not np.isfinite(denom) or denom < 1e-8:
+        return np.zeros_like(res, dtype=np.float32)
+    return (res - res_min) / denom
+
+
 def test():
 
     dataset_path = './Data_all/COD-D/Test_depth/'
@@ -101,13 +113,13 @@ def test():
             if res.shape[-2] != target_h or res.shape[-1] != target_w:
                 res = nn.upsample(res, size=(target_h, target_w), mode='bilinear', align_corners=False)
             res = res.sigmoid().numpy().squeeze()
-            if np.isnan(res).any():
-                print(f"Warning: NaN in output for {name}, skipping")
+            res = normalize_map(res)
+            if res is None:
+                print(f"Warning: non-finite output for {name}, skipping")
                 monitor.log_eval_sample(dataset, name, skipped=True)
                 del image, gt, depth, batched_input, res
                 sync_gc()
                 continue
-            res = (res - res.min()) / (res.max() - res.min() + 1e-8)
             out_img = (res * 255).clip(0, 255).astype(np.uint8)
             if not cv2.imwrite(save_path + name, out_img):
                 print(f"Warning: failed to write prediction for {name}")

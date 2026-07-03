@@ -62,13 +62,15 @@ class AvgMeter(object):
         self.val = val
         self.sum += val * n
         self.count += n
-        self.avg = self.sum / self.count
+        self.avg = self.sum / max(self.count, 1)
         self.losses.append(val)
 
     def show(self):
         a = len(self.losses)
         b = np.maximum(a-self.num, 0)
         c = self.losses[b:]
+        if len(c) == 0:
+            return 0.0
         #print(c)
         #d = torch.mean(torch.stack(c))
         #print(d)

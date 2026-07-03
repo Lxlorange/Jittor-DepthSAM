@@ -38,19 +38,30 @@ def get_loader(image_root, gt_root, depth_root, batchsize, trainsize, distribute
     return dataset, sampler
 
 
-def structure_loss(pred, mask):
+def structure_loss(pred, mask, eps=1e-8):
     weit = 1 + 5 * jt.abs(nn.avg_pool2d(mask, kernel_size=31, stride=1, padding=15) - mask)
     max_val = jt.clamp(-pred, min_v=0)
     log_term = max_val + ((-max_val).exp() + (-pred - max_val).exp()).log()
     wbce = (1 - mask) * pred + log_term
-    wbce = jt.sum(weit * wbce, dims=[2, 3]) / jt.sum(weit, dims=[2, 3])
+    wbce = jt.sum(weit * wbce, dims=[2, 3]) / (jt.sum(weit, dims=[2, 3]) + eps)
 
     pred = jt.sigmoid(pred)
     inter = jt.sum((pred * mask) * weit, dims=[2, 3])
     union = jt.sum((pred + mask) * weit, dims=[2, 3])
-    wiou = 1 - (inter + 1) / (union - inter + 1)
+    wiou = 1 - (inter + 1) / (union - inter + 1 + eps)
 
     return (wbce + wiou).mean()
+
+
+def normalize_map(res):
+    if not np.isfinite(res).all():
+        return None
+    res_min = res.min()
+    res_max = res.max()
+    denom = res_max - res_min
+    if not np.isfinite(denom) or denom < 1e-8:
+        return np.zeros_like(res, dtype=np.float32)
+    return (res - res_min) / denom
 
 
 def is_dist_avail_and_initialized():
@@ -338,14 +349,14 @@ def test_cod(w_path, generator=None, monitor=None):
             res = generator(batched_input, image)
             res = nn.upsample(res, size=gt.shape[-2:], mode='bilinear', align_corners=False)
             res = res.sigmoid().numpy().squeeze()
-            if np.isnan(res).any():
-                print(f"Warning: NaN in output for {name}, skipping")
+            res = normalize_map(res)
+            if res is None:
+                print(f"Warning: non-finite output for {name}, skipping")
                 if monitor is not None:
                     monitor.log_eval_sample(dataset, name, skipped=True)
                 del image, gt, depth, batched_input, res
                 sync_gc()
                 continue
-            res = (res - res.min()) / (res.max() - res.min() + 1e-8)
             out_img = (res * 255).clip(0, 255).astype(np.uint8)
             if not cv2.imwrite(save_path + name, out_img):
                 print(f"Warning: failed to write prediction for {name}")
