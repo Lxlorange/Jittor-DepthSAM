@@ -8,7 +8,12 @@ import jittor.nn as nn
 
 from segment_anything_training.build_DepthSAM import build_sam_DepthSAM
 from train import structure_loss, trainable_parameters
-from utils.jittor_runtime import configure_jittor_runtime,print_runtime_hints
+from utils.jittor_runtime import (
+    configure_jittor_runtime,
+    maybe_print_memory_profile,
+    optional_memory_profile,
+    print_runtime_hints,
+)
 
 def get_args():
     parser = argparse.ArgumentParser()
@@ -19,6 +24,7 @@ def get_args():
     parser.add_argument("--iters", type=int, default=30)
     parser.add_argument("--lr", type=float, default=5e-5)
     parser.add_argument("--profile", choices=["full", "encoder", "decoder"], default="full")
+    parser.add_argument("--memory_profile", action="store_true")
     parser.add_argument("--output", default="")
     return parser.parse_args()
 
@@ -104,6 +110,13 @@ def main():
 
     for _ in range(args.warmup):
         run_step(model, optimizer, images, gts, args.mode, args.profile)
+        sync()
+
+    if args.memory_profile:
+        with optional_memory_profile(True):
+            run_step(model, optimizer, images, gts, args.mode, args.profile)
+            sync()
+        maybe_print_memory_profile(True)
         sync()
 
     start = time.perf_counter()
