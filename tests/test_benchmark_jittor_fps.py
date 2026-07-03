@@ -17,6 +17,7 @@ def get_args():
     parser.add_argument("--warmup", type=int, default=5)
     parser.add_argument("--iters", type=int, default=30)
     parser.add_argument("--lr", type=float, default=5e-5)
+    parser.add_argument("--profile", choices=["full", "encoder", "decoder"], default="full")
     parser.add_argument("--output", default="")
     return parser.parse_args()
 
@@ -47,8 +48,28 @@ def peak_memory_mb():
         return None
 
 
-def run_step(model, optimizer, images, gts, mode):
+def run_step(model, optimizer, images, gts, mode, profile):
     batched_input = make_batched_input(images)
+
+    if profile == "encoder":
+        pred = model.image_encoder(images)[1][0]
+        if mode == "train":
+            loss = pred.mean()
+            optimizer.step(loss)
+            return loss
+        return pred
+
+    if profile == "decoder":
+        _, features = model.image_encoder(images)
+        out1, out_1 = model.decoder(features[3], features[2], features[1], features[0])
+        pred = out1
+        if mode == "train":
+            if pred.shape != gts.shape:
+                gts = jt.rand(pred.shape)
+            loss = structure_loss(pred, gts)
+            optimizer.step(loss)
+            return loss
+        return pred
     
     if mode == "forward":
         with jt.no_grad():
@@ -79,12 +100,12 @@ def main():
     sync()
 
     for _ in range(args.warmup):
-        run_step(model, optimizer, images, gts, args.mode)
+        run_step(model, optimizer, images, gts, args.mode, args.profile)
         sync()
 
     start = time.perf_counter()
     for _ in range(args.iters):
-        run_step(model, optimizer, images, gts, args.mode)
+        run_step(model, optimizer, images, gts, args.mode, args.profile)
         sync()
     elapsed = time.perf_counter() - start
 
@@ -96,6 +117,7 @@ def main():
         "trainsize": args.trainsize,
         "warmup": args.warmup,
         "iters": args.iters,
+        "profile": args.profile,
         "elapsed_sec": elapsed,
         "fps": samples / elapsed,
         "ms_per_iter": elapsed * 1000 / args.iters,
