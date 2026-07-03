@@ -7,7 +7,6 @@ import jittor as jt
 
 from segment_anything_training.build_DepthSAM import build_sam_DepthSAM
 from train import structure_loss, trainable_parameters
-from utils.jittor_runtime import configure_jittor_runtime, print_runtime_hints, sync_gc
 
 
 def get_args():
@@ -36,10 +35,8 @@ def make_batched_input(images):
 
 
 def sync():
-    try:
-        jt.sync_all(True)
-    except TypeError:
-        jt.sync_all()
+    jt.sync_all()
+    jt.gc()
 
 
 def peak_memory_mb():
@@ -62,11 +59,12 @@ def run_step(model, optimizer, images, gts, mode):
 
 def main():
     args = get_args()
-    configure_jittor_runtime()
-    print_runtime_hints()
+    jt.flags.use_cuda = 1
+    if args.mode == "forward":
+        jt.set_grad_flag(False)
 
     model = build_sam_DepthSAM(image_size=args.trainsize)
-    model.train()
+    model.train() if args.mode == "train" else model.eval()
     optimizer = jt.optim.Adam(trainable_parameters(model), args.lr)
 
     images = jt.randn((args.batchsize, 3, args.trainsize, args.trainsize))
@@ -75,13 +73,12 @@ def main():
 
     for _ in range(args.warmup):
         run_step(model, optimizer, images, gts, args.mode)
-    sync()
-    sync_gc()
+        sync()
 
     start = time.perf_counter()
     for _ in range(args.iters):
         run_step(model, optimizer, images, gts, args.mode)
-    sync()
+        sync()
     elapsed = time.perf_counter() - start
 
     samples = args.batchsize * args.iters
