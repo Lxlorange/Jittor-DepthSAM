@@ -25,6 +25,14 @@ Thumbs.db
 *.tmp
 *.log
 
+# report
+*.aux
+*.log
+*.nav
+*.out
+*.snm
+*.toc
+
 # others
 /docs
 /Data_all

@@ -1,0 +1,94 @@
+\input{config.tex}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Basic information
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\newcommand{\mytitle}{DepthSAM-Jittor}
+\newcommand{\mysubtitle}{用 Jittor 框架迁移复现 DepthSAM 模型}
+\newcommand{\myauthor}{杨皓然}
+\newcommand{\myinstitute}{北京交通大学}
+\newcommand{\mydate}{\today}
+\newcommand{\myfooterleft}{杨皓然}
+\newcommand{\myfootermiddle}{DepthSAM：Jittor 框架复现}
+
+% Global style switch
+\UseSongFont
+% \UseBlackFont
+\useSmallCircleItem
+
+\begin{document}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Cover
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\begin{frame}
+  \begin{tikzpicture}[remember picture, overlay]
+    \node[fill=midblue, inner sep=0pt, outer sep=0pt,
+      minimum width=\paperwidth,
+      minimum height=0.5\paperheight,
+      anchor=north] at ([yshift=+1pt]current page.north) {};
+
+    \node[text=white,
+          font=\fontsize{32}{36}\selectfont\bfseries,
+          text width=0.88\paperwidth,
+          align=center] at ([yshift=-0.24\paperheight]current page.north)
+          {\mytitle};
+
+    \node[text=white,
+          font=\large,
+          text width=0.82\paperwidth,
+          align=center] at ([yshift=-0.37\paperheight]current page.north)
+          {\mysubtitle};
+
+    \node[text=black, font=\Large] at ([yshift=-1.35cm]current page.center)
+          {\myauthor};
+
+    \node[text=black, font=\Large] at ([yshift=-2.3cm]current page.center)
+          {\myinstitute};
+
+    \node[text=black, font=\normalsize] at ([yshift=-3.05cm]current page.center)
+          {\mydate};
+  \end{tikzpicture}
+\end{frame}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Contents
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\begin{frame}{目录}
+  \vspace{0.7em}
+
+  \centering
+  \renewcommand{\arraystretch}{1.18}
+  \begin{tabular}{@{}r p{0.78\textwidth}@{}}
+    1. &
+    COD之于语义分割\\[-0.15em]
+    & {\footnotesize\textcolor{midblue}{参考论文：}
+      \textbf{FCN}\quad \textbf{UNet}\quad \textbf{SINet}}\\[0.55em]
+
+    2. &
+    前景背景分析\\[-0.15em]
+    & {\footnotesize\textcolor{midblue}{参考论文：}
+      \textbf{FEDER} \quad SINet}\\[0.55em]
+
+    3. &
+    组织线索的三个策略\\[-0.15em]
+    & {\footnotesize\textcolor{midblue}{参考论文：}
+      \textbf{ZoomNet}\quad \textbf{DGNet}\quad \textbf{PraNet}}\\[0.55em]
+
+    4. &
+    COD中的Attention\\[-0.15em]
+    & {\footnotesize\textcolor{midblue}{参考论文：}
+      \textbf{PFNet}\quad \textbf{OVCOS} \quad SINet\quad PraNet}\\[0.55em]
+
+    5. &
+    不完全监督与零样本COD\\[-0.15em]
+    & {\footnotesize\textcolor{midblue}{参考论文：}
+      \textbf{ISCOS}\quad \textbf{ZSCOS}}\\[0.55em]
+
+    6. &
+    总结与思考\\
+  \end{tabular}
+\end{frame}
+
+
+\end{document}
