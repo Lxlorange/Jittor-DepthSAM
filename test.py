@@ -9,6 +9,7 @@ import jittor.nn as nn
 import numpy as np
 import cv2
 from segment_anything_training.build_DepthSAM import build_sam_DepthSAM
+from segment_anything_training.modeling.DepthSAM_edge import moe_loss_collector
 from data_cod import test_dataset
 from utils.experiment_monitor import ExperimentMonitor
 from utils.jittor_runtime import configure_jittor_runtime, print_runtime_hints, sync_gc
@@ -28,6 +29,7 @@ def get_args():
     parser.add_argument('--weight_decay', type=float, default=0.001, help='weight_decay')
     parser.add_argument('--feat_channel', type=int, default=64, help='reduced channel of saliency feat')
     parser.add_argument('--gpu', type=int, default='0', help='reduced channel of saliency feat')
+    parser.add_argument('--aux_weight', type=float, default=0.01, help='MOE load-balance auxiliary loss weight')
     return parser.parse_args()
 opt = get_args()
 
@@ -77,14 +79,16 @@ def test():
             "framework": "jittor",
             "trainsize": opt.trainsize,
             "model": model_path,
+            "aux_weight": opt.aux_weight,
             "test_root": dataset_path,
             "test_datasets": test_datasets,
             "note": "single-card full-dataset test",
         },
     )
+    moe_loss_collector.alpha = opt.aux_weight
     generator = build_sam_DepthSAM(image_size=opt.trainsize)
-    npz = np.load(model_path)
-    data = {key: jt.array(npz[key]) for key in npz.files}
+    with np.load(model_path) as npz:
+        data = {key: jt.array(npz[key]) for key in npz.files}
     if list(data.keys())[0].startswith('module.'):
         from collections import OrderedDict
         new_state_dict = OrderedDict()
