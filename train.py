@@ -8,6 +8,7 @@ import cv2
 import jittor as jt
 import datetime
 from segment_anything_training.build_DepthSAM import build_sam_DepthSAM
+from segment_anything_training.modeling.DepthSAM_edge import moe_loss_collector
 from utils.dataset_rgb_strategy2 import SalObjDataset
 from utils.utils import AvgMeter
 from utils.experiment_monitor import ExperimentMonitor
@@ -163,6 +164,7 @@ def get_args():
     parser.add_argument('--gpu', type=int, default='0', help='reduced channel of saliency feat')
     parser.add_argument('--log_interval', type=int, default=50, help='steps between scalar loss logging')
     parser.add_argument('--sync_interval', type=int, default=200, help='steps between explicit Jittor sync/gc calls')
+    parser.add_argument('--aux_weight', type=float, default=0.01, help='MOE load-balance auxiliary loss weight')
     return parser.parse_args()
 
 
@@ -190,6 +192,7 @@ def train():
             "trainsize": opt.trainsize,
             "log_interval": opt.log_interval,
             "sync_interval": opt.sync_interval,
+            "aux_weight": opt.aux_weight,
             "train_root": image_cod_root,
             "test_root": "./Data_all/COD-D/Test_depth/",
             "note": "single-card full-dataset run; recommended as about 2/3 of the original 300-epoch schedule",
@@ -198,6 +201,7 @@ def train():
 
     print("开始初始化模型，优化器...")
     generator = build_sam_DepthSAM(image_size=opt.trainsize)
+    moe_loss_collector.alpha = opt.aux_weight
     generator_optimizer = jt.optim.Adam(trainable_parameters(generator), opt.lr_gen)
 
     sample_count = getattr(train_loader, "total_len", len(train_loader))
@@ -244,7 +248,8 @@ def train():
             with optional_memory_profile(do_memory_profile):
                 s1 = generator(batched_input, images)
                 loss1 = structure_loss(s1, gts)
-                loss = loss1
+                loss_aux = moe_loss_collector.get_total_loss(generator)
+                loss = loss1 + loss_aux
 
                 generator_optimizer.step(loss)
                 maybe_print_memory_profile(do_memory_profile)
@@ -253,6 +258,7 @@ def train():
             if should_log:
                 loss_value = float(loss.item())
                 loss1_value = float(loss1.item())
+                loss_aux_value = float(loss_aux.item())
                 last_loss_value = loss_value
                 last_loss1_value = loss1_value
                 loss_record.update(loss_value, opt.batchsize)
@@ -265,6 +271,7 @@ def train():
                 )
                 train_loader_iter.set_postfix(
                     loss='{:.4f}'.format(loss_value),
+                    aux='{:.4f}'.format(loss_aux_value),
                     avg='{:.4f}'.format(float(loss_record.show())),
                     lr=current_lr,
                 )
@@ -274,7 +281,7 @@ def train():
                                   float(loss_record.show()), last_loss1_value))
             if i % opt.sync_interval == 0 or i == total_step:
                 sync_gc()
-            del images, gts, depth, batched_input, s1, loss1, loss
+            del images, gts, depth, batched_input, s1, loss1, loss_aux, loss
 
         print('{} Epoch [{:03d}/{:03d}] Finished, Avg Loss: {:.4f}'.
               format(datetime.datetime.now(), epoch, opt.epoch, float(loss_record.show())))

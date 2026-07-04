@@ -30,11 +30,12 @@ def conv1x1_bn_relu(in_planes, out_planes, stride=1):
     )
 
 class MOEAdapter(nn.Module):
-    def __init__(self, blk, num_experts=8, top_k=2) -> None:
+    def __init__(self, blk, num_experts=8, top_k=4) -> None:
         super(MOEAdapter, self).__init__()
         self.block = blk
         self.num_experts = max(1, int(os.environ.get("DEPTHSAM_MOE_EXPERTS", num_experts)))
         self.top_k = min(top_k, self.num_experts)
+        self.current_aux_loss = jt.array(0.0)
 
         dim = blk.attn.qkv.in_features
 
@@ -51,6 +52,15 @@ class MOEAdapter(nn.Module):
             ) for _ in range(self.num_experts)
         ])
 
+    def _topk(self, values):
+        try:
+            return jt.topk(values, self.top_k, dim=-1)
+        except TypeError:
+            try:
+                return jt.topk(values, self.top_k, -1)
+            except TypeError:
+                return values.topk(self.top_k, dim=-1)
+
     def execute(self, x):
         # x shape: (B, H, W, C)
         B, N, C = x.shape
@@ -60,16 +70,58 @@ class MOEAdapter(nn.Module):
         gate_logits = self.gate(x_flat)  # (B*H*W, num_experts)
         gate_weights = nn.softmax(gate_logits, dim=-1)
 
-        # Dense routing avoids Jittor top-k/where crashes and keeps every expert trainable.
+        if self.num_experts == 1:
+            routing_weights = jt.ones_like(gate_weights)
+            self.current_aux_loss = gate_weights.sum() * 0.0
+        else:
+            top_k_weights, top_k_indices = self._topk(gate_weights)
+            top_k_weights = top_k_weights / (jt.sum(top_k_weights, dims=[-1], keepdims=True) + 1e-8)
+
+            routing_weights = jt.zeros_like(gate_weights)
+            expert_ids = jt.arange(self.num_experts).reshape((1, self.num_experts))
+            for i in range(self.top_k):
+                selected_idx = top_k_indices[:, i].reshape((-1, 1))
+                selected_weight = top_k_weights[:, i].reshape((-1, 1))
+                routing_weights = routing_weights + (selected_idx == expert_ids).float32() * selected_weight
+
+            avg_prob_per_expert = jt.mean(gate_weights, dims=[0])
+            expert_mask = routing_weights > 0
+            tokens_per_expert = jt.sum(expert_mask.float32(), dims=[0])
+            frac_tokens_per_expert = tokens_per_expert / (B * N + 1e-8)
+            self.current_aux_loss = jt.sum(avg_prob_per_expert * frac_tokens_per_expert) * self.num_experts
+
         expert_outputs = []
         for e_idx in range(self.num_experts):
             expert_outputs.append(self.experts[e_idx](x_flat))
         expert_outputs = jt.stack(expert_outputs, dim=1)
 
-        output = jt.sum(expert_outputs * gate_weights.unsqueeze(-1), dims=[1])
+        output = jt.sum(expert_outputs * routing_weights.unsqueeze(-1), dims=[1])
         output = output.reshape(B, N, C)
         prompted = x + output
         return self.block(prompted)
+
+
+class MOELossCollector:
+    def __init__(self, alpha=0.01):
+        self.alpha = alpha
+
+    def get_total_loss(self, model: nn.Module) -> jt.Var:
+        total_aux_loss = None
+
+        pretrained = getattr(getattr(model, "image_encoder", None), "pretrained", None)
+        blocks = getattr(pretrained, "blocks", [])
+        for module in blocks:
+            if isinstance(module, MOEAdapter):
+                aux_loss = getattr(module, "current_aux_loss", None)
+                if aux_loss is not None:
+                    total_aux_loss = aux_loss if total_aux_loss is None else total_aux_loss + aux_loss
+
+        if total_aux_loss is None:
+            return jt.array(0.0)
+        return total_aux_loss * self.alpha
+
+
+moe_loss_collector = MOELossCollector(alpha=float(os.environ.get("DEPTHSAM_AUX_ALPHA", "0.01")))
 
 class EdgeDepthSAM(nn.Module):
     mask_threshold: float = 0.0
