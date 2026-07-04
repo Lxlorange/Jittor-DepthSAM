@@ -1,5 +1,6 @@
 import argparse
 import os
+import re
 # os.environ["CUDA_VISIBLE_DEVICES"] = "2"
 import torch
 import torch.nn.functional as F
@@ -17,6 +18,56 @@ import numpy as np
 from data_cod import test_dataset
 import cv2
 from tqdm import tqdm
+
+
+def checkpoint_epoch(path):
+    match = re.search(r"Model_(\d+)_gen\.pth$", os.path.basename(path))
+    return int(match.group(1)) if match else -1
+
+
+def load_generator_state(generator, checkpoint_path):
+    data = torch.load(checkpoint_path, map_location="cpu")
+    if list(data.keys())[0].startswith('module.'):
+        from collections import OrderedDict
+        new_state_dict = OrderedDict()
+        for k, v in data.items():
+            name = k.replace('module.', '')
+            new_state_dict[name] = v
+        generator.load_state_dict(new_state_dict)
+    else:
+        generator.load_state_dict(data)
+
+
+def cleanup_old_checkpoints(save_path, keep_checkpoints):
+    if keep_checkpoints < 0:
+        return
+    checkpoints = []
+    for name in os.listdir(save_path):
+        path = os.path.join(save_path, name)
+        if os.path.isfile(path) and checkpoint_epoch(path) >= 0:
+            checkpoints.append(path)
+    checkpoints.sort(key=checkpoint_epoch)
+    remove_count = max(0, len(checkpoints) - keep_checkpoints)
+    for path in checkpoints[:remove_count]:
+        try:
+            os.remove(path)
+            print(f"Removed old checkpoint: {path}")
+        except OSError as e:
+            print(f"Warning: failed to remove old checkpoint {path}: {e}")
+
+
+def save_generator_checkpoint(generator, path):
+    tmp_path = path + ".tmp"
+    try:
+        torch.save(generator.state_dict(), tmp_path)
+        os.replace(tmp_path, path)
+    except Exception:
+        if os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+        raise
 
 
 
@@ -231,6 +282,9 @@ def get_args():
     parser.add_argument('--gpu', type=int, default='0', help='reduced channel of saliency feat')
     parser.add_argument('--log_interval', type=int, default=50, help='steps between scalar loss logging')
     parser.add_argument('--sync_interval', type=int, default=200, help='steps between explicit CUDA sync calls')
+    parser.add_argument('--resume', default='', help='path to a generator checkpoint to resume from')
+    parser.add_argument('--start_epoch', type=int, default=0, help='first epoch to run; 0 infers from --resume')
+    parser.add_argument('--keep_checkpoints', type=int, default=3, help='number of latest Model_*_gen.pth files to keep; -1 disables cleanup')
     return parser.parse_args()
 
 
@@ -255,6 +309,9 @@ def train():
             "trainsize": opt.trainsize,
             "log_interval": opt.log_interval,
             "sync_interval": opt.sync_interval,
+            "resume": opt.resume,
+            "start_epoch": opt.start_epoch,
+            "keep_checkpoints": opt.keep_checkpoints,
             "train_root": image_cod_root,
             "test_root": "./Data_all/COD-D/Test_depth/",
             "note": "single-card full-dataset run; recommended as about 2/3 of the original 300-epoch schedule",
@@ -263,12 +320,21 @@ def train():
 
     print("开始初始化模型，优化器...")
     generator = build_sam_DepthSAM(image_size=opt.trainsize)
+    first_epoch = 1
+    if opt.resume:
+        print(f"Resuming generator from {opt.resume}")
+        load_generator_state(generator, opt.resume)
+        inferred_epoch = checkpoint_epoch(opt.resume) + 1
+        first_epoch = opt.start_epoch if opt.start_epoch > 0 else inferred_epoch
+        if first_epoch <= 0:
+            first_epoch = 1
+        print(f"Start epoch: {first_epoch}")
     generator.cuda()
     generator_optimizer = torch.optim.Adam(generator.parameters(), opt.lr_gen)
 
     total_step = len(train_loader)
     print("Start Training...")
-    for epoch in range(1, opt.epoch + 1):
+    for epoch in range(first_epoch, opt.epoch + 1):
         generator.train()
         loss_record = AvgMeter()
         current_lr = generator_optimizer.param_groups[0]['lr']
@@ -338,8 +404,11 @@ def train():
             os.makedirs(save_path)
 
         if epoch >= 10 or epoch % opt.epoch == 0:
-            torch.save(generator.state_dict(), save_path + 'Model' + '_%d' % epoch + '_gen.pth')
             w_path = save_path + 'Model_' + str(epoch) + '_gen.pth'
+            if opt.keep_checkpoints >= 0:
+                cleanup_old_checkpoints(save_path, max(0, opt.keep_checkpoints - 1))
+            save_generator_checkpoint(generator, w_path)
+            cleanup_old_checkpoints(save_path, opt.keep_checkpoints)
             test_cod(w_path, monitor)
 
     summary = monitor.finish({"checkpoint_dir": save_path})
