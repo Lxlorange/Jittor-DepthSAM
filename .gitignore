@@ -14,7 +14,6 @@ assets/test_predictions/
 *.pkl
 *.npy
 *.tar
-
 # VSCode
 .vscode/
 
@@ -26,7 +25,17 @@ Thumbs.db
 *.tmp
 *.log
 
+# report
+*.aux
+*.log
+*.nav
+*.out
+*.snm
+*.toc
+*.pdf
+
 # others
 /docs
 /Data_all
 /runs
+/test_maps
