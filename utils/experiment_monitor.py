@@ -124,6 +124,17 @@ class ExperimentMonitor:
         pred = np.asarray(pred)
         gt = np.asarray(gt)
 
+        if image.ndim == 3 and image.shape[0] in (1, 3) and image.shape[-1] not in (1, 3, 4):
+            image = np.transpose(image, (1, 2, 0))
+        if pred.ndim == 3 and pred.shape[0] == 1:
+            pred = pred[0]
+        if pred.ndim == 3 and pred.shape[-1] == 1:
+            pred = pred[..., 0]
+        if gt.ndim == 3 and gt.shape[0] == 1:
+            gt = gt[0]
+        if gt.ndim == 3 and gt.shape[-1] == 1:
+            gt = gt[..., 0]
+
         if image.ndim == 2:
             image = np.stack([image, image, image], axis=-1)
         if image.dtype != np.uint8:
@@ -131,6 +142,10 @@ class ExperimentMonitor:
 
         pred_img = (pred * 255).clip(0, 255).astype(np.uint8)
         gt_img = (gt * 255).clip(0, 255).astype(np.uint8)
+        if pred_img.ndim == 3 and pred_img.shape[-1] == 1:
+            pred_img = pred_img[..., 0]
+        if gt_img.ndim == 3 and gt_img.shape[-1] == 1:
+            gt_img = gt_img[..., 0]
         pred_img = cv2.cvtColor(pred_img, cv2.COLOR_GRAY2BGR)
         gt_img = cv2.cvtColor(gt_img, cv2.COLOR_GRAY2BGR)
         image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)

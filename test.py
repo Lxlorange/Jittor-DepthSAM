@@ -1,5 +1,6 @@
 import argparse
 import os
+import re
 # os.environ["CUDA_VISIBLE_DEVICES"] = "3"
 os.environ.setdefault("cpu_mem_limit", "-1")
 os.environ.setdefault("device_mem_limit", "-1")
@@ -19,6 +20,7 @@ def get_args():
     parser.add_argument('--lr_gen', type=float, default=1e-4, help='learning rate')
     parser.add_argument('--batchsize', type=int, default=1, help='training batch size')
     parser.add_argument('--trainsize', type=int, default=512, help='training dataset size')
+    parser.add_argument('--model', type=str, default='./checkpoints', help='checkpoint file or checkpoint directory')
     parser.add_argument('--clip', type=float, default=0.5, help='gradient clipping margin')
     parser.add_argument('--decay_rate', type=float, default=0.9, help='decay rate of learning rate')
     parser.add_argument('--decay_epoch', type=int, default=30, help='every n epochs decay learning rate')
@@ -45,8 +47,28 @@ def normalize_map(res):
     return (res - res_min) / denom
 
 
-def test():
+def resolve_checkpoint_path(path_or_dir):
+    if os.path.isfile(path_or_dir):
+        return path_or_dir
+    if os.path.isdir(path_or_dir):
+        candidates = []
+        for name in os.listdir(path_or_dir):
+            if not name.endswith('.npz'):
+                continue
+            full_path = os.path.join(path_or_dir, name)
+            match = re.search(r'Model_(\d+)_gen\.npz$', name)
+            epoch = int(match.group(1)) if match else -1
+            candidates.append((epoch, os.path.getmtime(full_path), full_path))
+        if not candidates:
+            raise FileNotFoundError(f'No .npz checkpoint found under: {path_or_dir}')
+        candidates.sort()
+        return candidates[-1][2]
+    raise FileNotFoundError(f'Checkpoint path not found: {path_or_dir}')
 
+
+def test():
+    model_path = resolve_checkpoint_path(opt.model)
+    print('Loading checkpoint from', model_path)
     dataset_path = './Data_all/COD-D/Test_depth/'
     test_datasets = ['CAMO']
     monitor = ExperimentMonitor(
@@ -54,14 +76,14 @@ def test():
         config={
             "framework": "jittor",
             "trainsize": opt.trainsize,
-            "model": "./checkpoints/Model_1_gen.npz",
+            "model": model_path,
             "test_root": dataset_path,
             "test_datasets": test_datasets,
             "note": "single-card full-dataset test",
         },
     )
     generator = build_sam_DepthSAM(image_size=opt.trainsize)
-    npz = np.load('./checkpoints/Model_1_gen.npz')
+    npz = np.load(model_path)
     data = {key: jt.array(npz[key]) for key in npz.files}
     if list(data.keys())[0].startswith('module.'):
         from collections import OrderedDict
