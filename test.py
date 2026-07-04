@@ -48,6 +48,9 @@ def get_args():
     parser.add_argument('--weight_decay', type=float, default=0.001, help='weight_decay')
     parser.add_argument('--feat_channel', type=int, default=64, help='reduced channel of saliency feat')
     parser.add_argument('--gpu', type=int, default='0', help='reduced channel of saliency feat')
+    parser.add_argument('--model', default='./checkpoints/Model_200_gen.pth', help='path to generator checkpoint')
+    parser.add_argument('--output_dir', default='test_maps_rebuttal', help='directory for predicted masks')
+    parser.add_argument('--datasets', default='CAMO,CHAMELEON,COD10K,NC4K', help='comma-separated test datasets')
     return parser.parse_args()
 opt = get_args()
 
@@ -56,14 +59,15 @@ print('USE GPU', opt.gpu)
 def test():
 
     dataset_path = './Data_all/COD-D/Test_depth/'
-    test_datasets = ['CAMO', 'CHAMELEON', 'COD10K', 'NC4K']
+    test_datasets = [x.strip() for x in opt.datasets.split(',') if x.strip()]
     # test_datasets = ['CAMO']
     monitor = ExperimentMonitor(
         "torch_test",
         config={
             "framework": "torch",
             "trainsize": opt.trainsize,
-            "model": "./checkpoints/Model_200_gen.pth",
+            "model": opt.model,
+            "output_dir": opt.output_dir,
             "test_root": dataset_path,
             "test_datasets": test_datasets,
             "note": "single-card full-dataset test",
@@ -71,7 +75,7 @@ def test():
     )
     print("开始初始化模型，优化器...")
     generator = build_sam_DepthSAM(image_size=opt.trainsize)
-    data = torch.load('./checkpoints/Model_200_gen.pth', map_location='cpu')
+    data = torch.load(opt.model, map_location='cpu')
     if list(data.keys())[0].startswith('module.'):
         from collections import OrderedDict
         new_state_dict = OrderedDict()
@@ -101,8 +105,9 @@ def test():
 
     # generator.cuda()
     generator.eval()
+    results = {}
     for dataset in test_datasets:
-        save_path = 'test_maps_rebuttal/' + dataset + '/'
+        save_path = os.path.join(opt.output_dir, dataset) + '/'
         if not os.path.exists(save_path):
             os.makedirs(save_path)
 
@@ -148,9 +153,14 @@ def test():
                 monitor.log_eval_sample(dataset, name, sample_mae)
                 monitor.save_prediction_panel(dataset, name, img_for_post, res, gt)
             mae = mae_sum / max(test_count, 1)
+            results[dataset] = {
+                "mae": float(mae),
+                "count": int(test_count),
+            }
             print(dataset, 'mae is : ', mae)
 
-    summary = monitor.finish({"mode": "test"})
+    monitor.write_json("test_results.json", results)
+    summary = monitor.finish({"mode": "test", "results": results})
     print("Experiment log saved to:", summary["run_dir"])
 
 if __name__ == '__main__':
