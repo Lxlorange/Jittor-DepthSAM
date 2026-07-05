@@ -32,6 +32,7 @@ Thumbs.db
 *.out
 *.snm
 *.toc
+*.vrb
 *.pdf
 
 # others

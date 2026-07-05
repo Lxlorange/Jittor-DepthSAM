@@ -553,18 +553,6 @@ class Image_prompt_Dataset(data.Dataset):
         return self.size
 
 
-# dataloader for training
-def get_loader(image_root, gt_root, depth_root, batchsize, trainsize, shuffle=True, num_workers=0, pin_memory=False):
-    dataset = SalObjDataset(image_root, gt_root, depth_root, trainsize)
-    dataset.set_attrs(
-        batch_size=batchsize,
-        shuffle=shuffle,
-        num_workers=num_workers,
-        keep_numpy_array=True
-    )
-    return dataset
-
-
 # test dataset and loader
 class test_dataset:
     def __init__(self, image_root, testsize):

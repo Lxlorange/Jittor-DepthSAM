@@ -1,4 +1,23 @@
-\input{config.tex}
+﻿\input{config.tex}
+\usepackage{graphicx}
+\usepackage{listings}
+
+\lstdefinestyle{pythoncode}{
+  language=Python,
+  basicstyle=\ttfamily\scriptsize,
+  backgroundcolor=\color{gray!8},
+  frame=single,
+  rulecolor=\color{midblue!55},
+  framerule=0.4pt,
+  xleftmargin=0.5em,
+  xrightmargin=0.5em,
+  framesep=0.45em,
+  columns=fullflexible,
+  keepspaces=true,
+  showstringspaces=false,
+  breaklines=true,
+  tabsize=2
+}
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % Basic information
@@ -78,4 +97,1204 @@
 \end{frame}
 
 
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% 1. Paper
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{DepthSAM论文解读}
+
+\begin{frame}{项目信息}
+  
+  \setlength{\leftmargini}{1.2em}
+  \setlength{\itemsep}{0.9em}
+  
+  \begin{itemize}
+    \item \textbf{复现论文}\\
+      {Beyond Appearance: Camouflaged Object Detection via Geometric Structure}
+    \item \textbf{方法}\\
+      {将几何结构信息与SAM解码器相结合，将深度估计适配到COD任务}
+    \item \textbf{任务}\\
+      伪装目标检测
+    \item \textbf{会议}\\
+      CVPR 2026
+    \item \textbf{作者}\\
+      Han et al.
+  \end{itemize}
+  
+  \begin{tikzpicture}[remember picture, overlay]
+    \node[anchor=center, xshift=2.5cm, yshift=-1.5cm] at (current page.center) {
+      \includegraphics[height=0.48\textheight]{image/motivation.png}
+    };
+  \end{tikzpicture}
+\end{frame}
+
+\begin{frame}{DepthSAM 总体结构}
+  \vspace{0.3em}
+  
+  \begin{center}
+    \includegraphics[width=0.95\textwidth]{image/DepthSAM.png}
+  \end{center}
+  
+  \small
+  \setlength{\leftmargini}{1.2em}
+  \begin{itemize}
+    \item \textbf{SMEA}：冻结的 DINOv2 编码器，多专家混合
+    \item \textbf{GSFM}：融合几何和语义信息，级联三个 SFRM，渐进式融合多尺度解码器特征
+    \item \textbf{预测头}：两个卷积层将融合特征映射为单通道分割掩码
+    \item \textbf{监督}：$\mathcal{L} = \mathcal{L}_{wBCE} + \mathcal{L}_{wIoU} + \alpha N \sum_{i=1}^{N} f_i P_i$
+  \end{itemize}
+  
+\end{frame}
+
+\begin{frame}{SFRM模块}
+
+  \begin{center}
+    \includegraphics[width=0.82\textwidth]{image/SFRM.png}
+  \end{center}
+  \begin{columns}[T,totalwidth=\textwidth]
+    \begin{column}{0.3\textwidth}
+      \centering
+      \textbf{空间分支}\\
+      \textbf{频率分支}\\
+    \end{column}
+    \begin{column}{0.3\textwidth}
+      \centering
+      \textbf{四路注意力}\\
+      \vspace{0.1em}
+      \footnotesize{1\&4路为自注意力 \\ 2\&3路为交叉注意力\\}
+    \end{column}
+    \begin{column}{0.3\textwidth}
+      \centering
+      \textbf{拼接输出}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+% \begin{frame}{模块到代码的对应关系}
+%   \small
+%   \renewcommand{\arraystretch}{1.25}
+%   \begin{tabular}{p{0.28\textwidth} p{0.34\textwidth} p{0.28\textwidth}}
+%     \toprule
+%     论文模块 & Jittor代码模块 & 作用 \\
+%     \midrule
+%     DINOv2 Encoder & \texttt{DepthAnythingV2} & 提取几何结构特征 \\
+%     SMEA & \texttt{MOEAdapter} & 冻结 block 前注入可训练 adapter \\
+%     DPT Decoder & \texttt{image\_encoder(x)} 输出 features & 输出多尺度特征 \\
+%     GSFM & \texttt{Decode} & 多阶段渐进融合 \\
+%     SFRM & \texttt{MEF + FM + Attention\_SD} & 频域/空间域交互 \\
+%     Prediction Head & \texttt{premp} & 生成 coarse mask prompt \\
+%     SAM Decoder & \texttt{PromptEncoder + EdgeDecoder} & 预测最终 mask \\
+%     \bottomrule
+%   \end{tabular}
+% \end{frame}
+
+% %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% % 2. Reproduction
+% %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Jittor框架复现流程}
+\begin{frame}[fragile]{数据准备}
+  \vspace{0.2em}
+  \small
+  数据从github/Garyson1204/HGINet仓库提供的谷歌云盘处下载。训练集混合抽取了COD10K和CAMO数据集，训练集则按照COD10K, CAMO, CHAMELEON,  NC4K分别存放。
+  \vspace{0.5em}
+  \scriptsize
+\begin{lstlisting}[style=pythoncode]
+Data_all/COD-D/
+  Train_depth/
+    Imgs/
+    GT/
+    depth/
+  Test_depth/
+    CAMO/
+      Imgs/
+      GT/
+      depth/
+    COD10K/
+    NC4K/
+    CHAMELEON/
+\end{lstlisting}
+
+  \vspace{0.5em}
+  \small
+  深度图由用\texttt{depth\_anything\_v2\_vitl.pth} 生成，Jittor 训练时直接读取 \texttt{depth/} 文件夹。 \\
+  将 Depth Anything V2 ViT-L 权重转换为 Jittor 可读的 \texttt{npz}。
+\end{frame}
+
+
+\begin{frame}[fragile]{模型构建入口}
+\begin{lstlisting}[style=pythoncode,basicstyle=\ttfamily\tiny]
+# 总控模型
+  mobile_sam = DepthSAM(
+          # 提取深度/几何结构特征，内部包含 DINOv2 backbone 和 DPT decoder
+          image_encoder=DepthAnythingV2(**model_configs['vitl']),
+          
+          # 几何语义融合解码器 GSFM
+          decoder = Decode(256,256,256,256),
+
+          # 把 GSFM 产生的粗 mask 编码成 SAM 可用的 prompt embedding
+          prompt_encoder=PromptEncoder(
+              embed_dim=prompt_embed_dim, #通道
+              image_embedding_size=(image_embedding_size, image_embedding_size), # 尺寸
+              input_image_size=(image_size, image_size), # 输入尺寸
+              mask_in_chans=16,
+          ),
+
+          # 用 SAM 的 TwoWayTransformer 输出最终 mask
+          mask_decoder= MaskDecoder(
+              transformer=TwoWayTransformer(
+                  depth=2,
+                  embedding_dim=prompt_embed_dim,
+                  mlp_dim=2048,
+                  num_heads=8,
+              ),
+              transformer_dim=prompt_embed_dim,
+          ),
+          pixel_mean=[123.675, 116.28, 103.53],
+          pixel_std=[58.395, 57.12, 57.375],
+      )
+\end{lstlisting}
+\end{frame}
+
+\begin{frame}[fragile]{模型构建入口}
+\begin{lstlisting}[style=pythoncode,basicstyle=\ttfamily\tiny]
+class DepthSAM(nn.Module):
+    def __init__(self, image_encoder, decoder, prompt_encoder, mask_decoder):
+        super().__init__()
+        # 以npz格式加载冻结DAv2编码器
+        self.image_encoder.load_state_dict("depth_anything_v2_vitl.npz")
+
+        # 串行注入SMEA，仅gate/experts可训练
+        for p in self.image_encoder.parameters(): p.requires_grad = False
+        self.image_encoder.pretrained.blocks = nn.Sequential(*[
+            MOEAdapter(b) for b in self.image_encoder.pretrained.blocks])
+        for block in self.image_encoder.pretrained.blocks:
+            for p in list(block.gate.parameters())+list(block.experts.parameters()):
+                p.requires_grad = True        
+
+        for m in [prompt_encoder.point_embeddings, prompt_encoder.pe_layer_2,
+                  prompt_encoder.not_a_point_embed, prompt_encoder.no_mask_embed]:
+            for p in m.parameters(): p.requires_grad = False
+
+    def execute(self, x, batched_input):
+        # DAv2提多尺度特征 → GSFM融合 → SAM解码器输出最终掩码
+        depth, features = self.image_encoder(x)
+        out, embeddings = self.decoder(features[3], features[2], features[1], features[0])
+        outputs = []
+        for record, emb, hint in zip(batched_input, embeddings, out):
+            self.prompt_encoder.image_embedding_size = tuple(emb.shape[-2:])
+            sparse, dense = self.prompt_encoder(points=None, boxes=record.get("boxes"), masks=hint.unsqueeze(0))
+            low_res, _ = self.mask_decoder(emb.unsqueeze(0), self.prompt_encoder.get_dense_pe(), sparse, dense)
+            outputs.append(low_res)
+        return jt.concat(outputs, dim=0)
+\end{lstlisting}
+\end{frame}
+
+\begin{frame}[fragile]{MOEAdapter}
+\begin{lstlisting}[style=pythoncode,basicstyle=\ttfamily\tiny]
+class MOEAdapter(nn.Module):
+    def __init__(self, blk, num_experts=8, top_k=4):
+        super().__init__()
+
+        # 保存原始 ViT Transformer block；该 block 本身保持冻结
+        self.block = blk
+
+        # N 个专家；实验中可通过 DEPTHSAM_MOE_EXPERTS 调整专家数
+        self.num_experts = max(1, int(os.environ.get(
+            "DEPTHSAM_MOE_EXPERTS", num_experts)))
+        self.top_k = min(top_k, self.num_experts)
+        self.current_aux_loss = jt.array(0.0)
+
+        # token hidden dim 来自原始 block 的 qkv 输入维度
+        dim = blk.attn.qkv.in_features
+
+        # G(x)：门控网络，为每个 token 预测 expert 权重
+        self.gate = nn.Linear(dim, self.num_experts)
+
+        # E_i(x)：轻量 MLP expert，瓶颈维度为 32
+        self.experts = nn.ModuleList([
+            nn.Sequential(
+                nn.Linear(dim, 32),
+                nn.GELU(),
+                nn.Linear(32, dim),
+                nn.GELU(),
+            )
+            for _ in range(self.num_experts)
+        ])
+\end{lstlisting}
+\end{frame}
+
+\begin{frame}[fragile]{MOEAdapter}
+\begin{lstlisting}[style=pythoncode,basicstyle=\ttfamily\tiny]
+def execute(self, x):
+    # x: (B, N, C)，N 是 token 数
+    B, N, C = x.shape
+    x_flat = x.reshape(B * N, C)
+
+    # 1. 计算全部 expert 的门控概率 G(x)
+    gate_logits = self.gate(x_flat)
+    gate_weights = nn.softmax(gate_logits, dim=-1)
+
+    # 2. 退化情形：单 expert 时不再需要 top-k routing
+    if self.num_experts == 1:
+        routing_weights = jt.ones_like(gate_weights)
+        self.current_aux_loss = gate_weights.sum() * 0.0
+    else:
+        # 3. 保留 Top-k experts，并归一化其权重
+        top_w, top_idx = self._topk(gate_weights)
+        top_w = top_w / (jt.sum(top_w, dims=[-1], keepdims=True) + 1e-8)
+
+        # 4. 构造稀疏 routing 权重：非 Top-k expert 权重为 0
+        routing_weights = jt.zeros_like(gate_weights)
+        expert_ids = jt.arange(self.num_experts).reshape((1, self.num_experts))
+        for i in range(self.top_k):
+            idx = top_idx[:, i].reshape((-1, 1))
+            w = top_w[:, i].reshape((-1, 1))
+            routing_weights += (idx == expert_ids).float32() * w
+
+        # 5. MoE 负载均衡辅助损失：alpha * N * sum_i f_i P_i
+        prob = jt.mean(gate_weights, dims=[0])
+        mask = routing_weights > 0
+        frac = jt.sum(mask.float32(), dims=[0]) / (B * N + 1e-8)
+        self.current_aux_loss = jt.sum(prob * frac) * self.num_experts
+\end{lstlisting}
+\end{frame}
+
+\begin{frame}[fragile]{MOEAdapter}
+\begin{lstlisting}[style=pythoncode,basicstyle=\ttfamily\tiny]
+def execute(self, x):
+    ...
+    # 6. 为保证 Jittor 图稳定，先计算所有 expert，再按 routing 权重聚合
+    expert_outputs = []
+    for e_idx in range(self.num_experts):
+        expert_outputs.append(self.experts[e_idx](x_flat))
+    expert_outputs = jt.stack(expert_outputs, dim=1)
+
+    # 7. 加权求和得到 MoE 调制量
+    output = jt.sum(
+        expert_outputs * routing_weights.unsqueeze(-1),
+        dims=[1]
+    ).reshape(B, N, C)
+
+    # 8. 残差注入：x_m = x + sum_i(g_i E_i(x)) / sum_i(g_i)
+    prompted = x + output
+
+    # 9. 调制后的 token 再进入冻结的原始 Transformer block
+    return self.block(prompted)
+
+class MOELossCollector:
+    def get_total_loss(self, model):
+        # 遍历所有 MOEAdapter，收集每层 current_aux_loss
+        total = None
+        for module in model.image_encoder.pretrained.blocks:
+            if isinstance(module, MOEAdapter):
+                aux = module.current_aux_loss
+                total = aux if total is None else total + aux
+        return jt.array(0.0) if total is None else total * self.alpha
+\end{lstlisting}
+\end{frame}
+
+\begin{frame}[fragile]{DepthAnythingV2}
+\begin{lstlisting}[style=pythoncode,basicstyle=\ttfamily\tiny]
+class DepthAnythingV2(nn.Module):
+    def __init__(self, encoder="vitl", features=256,
+                 out_channels=[256, 512, 1024, 1024], ...):
+        super().__init__()
+        # 不同规模 DINOv2 对应不同中间层；本项目使用 vitl
+        self.intermediate_layer_idx = {
+            "vitl": [4, 11, 17, 23],
+            "vitg": [9, 19, 29, 39],
+        }
+        self.encoder = encoder
+        # pretrained 对应冻结的 DINOv2 backbone
+        self.pretrained = DINOv2(model_name=encoder)
+        # DPTHead: ViT tokens -> dense depth + multi-scale features
+        self.depth_head = DPTHead(self.pretrained.embed_dim, features,
+                                  out_channels=out_channels)
+
+    def execute(self, x):
+        # DINOv2 patch size = 14，H/W 需要能被 14 整除
+        patch_h, patch_w = x.shape[-2] // 14, x.shape[-1] // 14
+        # 取 4 个中间层 token，保留 cls token
+        feats = self.pretrained.get_intermediate_layers(
+            x, self.intermediate_layer_idx[self.encoder],
+            return_class_token=True)
+        # depth 用于几何监督/深度输出，fts 送入后续 GSFM
+        depth, fts = self.depth_head(feats, patch_h, patch_w)
+        return nn.relu(depth), fts
+\end{lstlisting}
+\end{frame}
+
+\begin{frame}[fragile]{DPTHead}
+\begin{lstlisting}[style=pythoncode,basicstyle=\ttfamily\tiny]
+class DPTHead(nn.Module):
+    def __init__(self, in_channels, features=256,
+                 out_channels=[256, 512, 1024, 1024], ...):
+        super().__init__()
+
+        # 1x1 Conv：把四层 DINOv2 token 投影到 DPT 通道数
+        self.projects = nn.ModuleList([
+            nn.Conv2d(in_channels, c, kernel_size=1)
+            for c in out_channels
+        ])
+
+        # 四个尺度对齐到 DPT decoder 需要的空间分辨率
+        self.resize_layers = nn.ModuleList([
+            nn.ConvTranspose2d(out_channels[0], out_channels[0], 4, 4),
+            nn.ConvTranspose2d(out_channels[1], out_channels[1], 2, 2),
+            nn.Identity(),
+            nn.Conv2d(out_channels[3], out_channels[3], 3, stride=2, padding=1),
+        ])
+
+        # scratch 中包含 layer*_rn 和 refinenet*，对应 DPT decoder
+        self.scratch = _make_scratch(out_channels, features)
+        self.scratch.refinenet4 = _make_fusion_block(features, use_bn=False)
+        self.scratch.refinenet3 = _make_fusion_block(features, use_bn=False)
+        self.scratch.refinenet2 = _make_fusion_block(features, use_bn=False)
+        self.scratch.refinenet1 = _make_fusion_block(features, use_bn=False)
+
+        # 输出深度图的预测头；中间 path_4...path_1 还会作为 GSFM 输入
+        self.scratch.output_conv1 = nn.Conv2d(features, features // 2, 3, padding=1)
+        self.scratch.output_conv2 = nn.Sequential(
+            nn.Conv2d(features // 2, 32, 3, padding=1),
+            nn.ReLU(), nn.Conv2d(32, 1, 1), nn.ReLU())
+\end{lstlisting}
+\end{frame}
+
+\begin{frame}[fragile]{DPTHead}
+\[
+F_4,F_3,F_2,F_1 = \operatorname{DPTHead}
+\big(\operatorname{DINOv2}_{l_1,l_2,l_3,l_4}(I)\big)
+\]
+\begin{lstlisting}[style=pythoncode,basicstyle=\ttfamily\tiny]
+def execute(self, out_features, patch_h, patch_w):
+    out = []
+    for i, x in enumerate(out_features):
+        # patch tokens: (B,N,C) -> (B,C,H,W)
+        x = x[0]
+        x = x.permute(0, 2, 1).reshape((x.shape[0], x.shape[-1], patch_h, patch_w))
+        # 投影通道并调整空间尺度
+        x = self.projects[i](x)
+        x = self.resize_layers[i](x)
+        out.append(x)
+
+    layer_1, layer_2, layer_3, layer_4 = out
+    # DPT 自顶向下融合：深层语义逐步融合浅层细节
+    l1, l2 = self.scratch.layer1_rn(layer_1), self.scratch.layer2_rn(layer_2)
+    l3, l4 = self.scratch.layer3_rn(layer_3), self.scratch.layer4_rn(layer_4)
+    path_4 = self.scratch.refinenet4(l4, size=l3.shape[2:])
+    path_3 = self.scratch.refinenet3(path_4, l3, size=l2.shape[2:])
+    path_2 = self.scratch.refinenet2(path_3, l2, size=l1.shape[2:])
+    path_1 = self.scratch.refinenet1(path_2, l1)
+
+    # features = [F4,F3,F2,F1]，后续送入 Decode / GSFM
+    features = [path_4, path_3, path_2, path_1]
+    depth = self.scratch.output_conv2(
+        nn.interpolate(self.scratch.output_conv1(path_1),
+                       (patch_h * 14, patch_w * 14),
+                       mode="bilinear", align_corners=True))
+    return depth, features
+\end{lstlisting}
+\end{frame}
+
+\begin{frame}[fragile]{DepthAnythingV2}
+\begin{lstlisting}[style=pythoncode,basicstyle=\ttfamily\tiny]
+def infer_image(self, raw_image, input_size=518):
+    # 推理接口：OpenCV 图像 -> 网络张量 -> 原图尺寸深度图
+    image, (h, w) = self.image2tensor(raw_image, input_size)
+    depth, _ = self.execute(image)
+    depth = nn.interpolate(depth, (h, w),
+                           mode="bilinear", align_corners=True)[0, 0]
+    return depth.numpy()
+
+def image2tensor(self, raw_image, input_size=518):
+    # 保持比例，且保证输入尺寸是 patch size 14 的倍数
+    transform = Compose([
+        Resize(width=input_size, height=input_size,
+               resize_target=False,
+               keep_aspect_ratio=True,
+               ensure_multiple_of=14,
+               resize_method="lower_bound",
+               image_interpolation_method=cv2.INTER_CUBIC),
+        NormalizeImage(mean=[0.485, 0.456, 0.406],
+                       std=[0.229, 0.224, 0.225]),
+        PrepareForNet(),
+    ])
+
+    h, w = raw_image.shape[:2]
+    image = cv2.cvtColor(raw_image, cv2.COLOR_BGR2RGB) / 255.0
+    image = transform({"image": image})["image"]
+    return jt.array(image).unsqueeze(0), (h, w)
+\end{lstlisting}
+\end{frame}
+
+\begin{frame}[fragile]{NormalizeImage / PrepareForNet}
+\begin{lstlisting}[style=pythoncode,basicstyle=\ttfamily\tiny]
+class Resize(object):
+    def __call__(self, sample):
+        # 按 lower_bound / keep_aspect_ratio 计算新尺寸
+        # constrain_to_multiple_of 保证 H,W 是 14 的倍数
+        width, height = self.get_size(
+            sample["image"].shape[1],
+            sample["image"].shape[0])
+        sample["image"] = cv2.resize(
+            sample["image"], (width, height),
+            interpolation=self.__image_interpolation_method)
+        return sample
+
+class NormalizeImage(object):
+    def __init__(self, mean, std):
+        self.__mean = mean
+        self.__std = std
+
+    def __call__(self, sample):
+        # ImageNet mean/std，与 DINOv2 预训练输入分布对齐
+        sample["image"] = (sample["image"] - self.__mean) / self.__std
+        return sample
+
+class PrepareForNet(object):
+    def __call__(self, sample):
+        # HWC -> CHW，并转成连续 float32，方便 Jittor 构图
+        image = np.transpose(sample["image"], (2, 0, 1))
+        sample["image"] = np.ascontiguousarray(image).astype(np.float32)
+        return sample
+\end{lstlisting}
+\end{frame}
+
+
+
+\begin{frame}[fragile]{Decode}
+\[
+F_o=\operatorname{SFRM}(\operatorname{SFRM}(\operatorname{SFRM}(F_4,F_3),F_2),F_1)
+\]
+\begin{lstlisting}[style=pythoncode,basicstyle=\ttfamily\tiny]
+class Decode(nn.Module):
+    def __init__(self, in1, in2, in3, in4):
+        super().__init__()
+        # premp: 最终融合特征 -> 粗 mask prompt
+        self.premp = nn.Sequential(
+            nn.ConvTranspose2d(in1, in1 // 2, kernel_size=2, stride=2),
+            LayerNorm2d(in1 // 2), nn.GELU(),
+            nn.Conv2d(in1 // 2, 1, kernel_size=3, padding=1),
+        )
+        # 三阶段渐进融合；fm1 使用轻量路径以控制 Jittor 显存
+        self.fm1 = MEF(in1, in2, use_attention=False)
+        self.fm2 = MEF(in2, in3)
+        self.fm3 = MEF(in3, in4)
+
+    def execute(self, x1, x2, x3, x4):
+        # 输入来自 DPTHead: x1=F4, x2=F3, x3=F2, x4=F1
+        br3 = self.fm3(x3, x4)
+        br2 = self.fm2(x2, br3)
+        br1 = self.fm1(x1, br2)
+        out = self.premp(br1)
+        return out, br1  # out: coarse mask, br1: image embedding
+\end{lstlisting}
+\end{frame}
+
+\begin{frame}[fragile]{MEF}
+\begin{lstlisting}[style=pythoncode,basicstyle=\ttfamily\tiny]
+class MEF(nn.Module):
+    def __init__(self, in1, in2, use_attention=True):
+        super().__init__()
+        # FM 对拼接后的双尺度特征进行空间/频域融合
+        self.fm = FM(in1 + in1, in1, use_attention=use_attention)
+        # 将低分辨率输入上采样并对齐到当前尺度
+        self.fm1 = nn.Sequential(
+            nn.ConvTranspose2d(in2, in1, kernel_size=2, stride=2),
+            LayerNorm2d(in1),
+            nn.GELU(),
+        )
+
+    def execute(self, in1, in2=None):
+        # in1: 当前层特征；in2: 更深层融合结果
+        in2 = self.fm1(in2)
+        x = jt.concat((in1, in2), dim=1)
+        return self.fm(x)
+\end{lstlisting}
+\end{frame}
+
+\begin{frame}[fragile]{FM}
+\begin{lstlisting}[style=pythoncode,basicstyle=\ttfamily\tiny]
+class FM(nn.Module):
+    def __init__(self, dim, oup, use_attention=True):
+        super().__init__()
+        self.dim = oup
+        # 1x1 conv 将 concat 后的通道数压回目标维度
+        self.conv_n = BasicConv2d(dim, self.dim, kernel_size=1, stride=1)
+        # Attention_SD 对应论文 SFRM 的空间-频域双域交互
+        self.asd = Attention_SD(self.dim) if use_attention else None
+        # DWConv 继续做局部上下文增强
+        self.ddd = DWConv(self.dim)
+
+    def execute(self, x):
+        x = self.conv_n(x)
+        out = self.asd(x, x) if self.asd is not None else x
+        return self.ddd(out)
+
+class BasicConv2d(nn.Module):
+    def execute(self, x):
+        # Conv + BN + ReLU，作为通用通道压缩模块
+        return self.relu(self.bn(self.conv(x)))
+\end{lstlisting}
+\end{frame}
+
+\begin{frame}[fragile]{Attention\_SD}
+\begin{lstlisting}[style=pythoncode,basicstyle=\ttfamily\tiny]
+class Attention_SD(nn.Module):
+    def __init__(self, dim, num_heads=2):
+        super().__init__()
+        self.num_heads = num_heads
+        # 频域分支 Q/K/V；代码中以 r 命名
+        self.qr, self.kr, self.vr = conv1x1(dim, dim), conv1x1(dim, dim), conv1x1(dim, dim)
+        # 空间分支 Q/K/V；代码中以 m 命名
+        self.qm, self.km, self.vm = conv1x1(dim, dim), conv1x1(dim, dim), conv1x1(dim, dim)
+        # 两个分支各自的温度系数
+        self.temperature = jt.ones((num_heads, 1, 1))
+        self.temperatured = jt.ones((num_heads, 1, 1))
+        # 四路输出拼接后压回 dim
+        self.project_out = conv3x3_bn_relu(dim * 4, dim)
+        # 频域局部增强：FFT -> channel weight -> IFFT
+        self.weight = nn.Sequential(
+            nn.Conv2d(dim, dim // 16, 1), nn.BatchNorm(dim // 16),
+            nn.ReLU(), nn.Conv2d(dim // 16, dim, 1), nn.Sigmoid())
+        self.weightd = nn.Sequential(
+            nn.Conv2d(dim, dim // 16, 1), nn.BatchNorm(dim // 16),
+            nn.ReLU(), nn.Conv2d(dim // 16, dim, 1), nn.Sigmoid())
+        self.project_outr = nn.Conv2d(dim * 2, dim, kernel_size=1)
+        self.project_outd = nn.Conv2d(dim * 2, dim, kernel_size=1)
+\end{lstlisting}
+\end{frame}
+
+\begin{frame}[fragile]{Attention\_SD}
+\begin{lstlisting}[style=pythoncode,basicstyle=\ttfamily\tiny]
+def execute(self, x, d):
+    b, c, h, w = x.shape
+    # 1. 频域自注意力：Q/K/V 先进入 FFT
+    q, k, v = self.qr(x), self.kr(x), self.vr(x)
+    q, k, v = _fft2(q.float32()), _fft2(k.float32()), _fft2(v.float32())
+    q, k, v = _split_heads(q, self.num_heads), _split_heads(k, self.num_heads), _split_heads(v, self.num_heads)
+    q, k = _normalize(q, dim=-1), _normalize(k, dim=-1)
+    attn_f = _complex_mul_real(q @ k.transpose((0, 1, 3, 2)), self.temperature)
+    attn_f = custom_complex_normalization(attn_f, dim=-1)
+    out_f = _complex_abs(_ifft2(attn_f @ v))
+    attn_f = _complex_abs(_ifft2(attn_f))
+
+    # 2. 空间自注意力：常规 QK^T attention
+    dq, dk, dv = self.qm(d), self.km(d), self.vm(d)
+    dq, dk, dv = _split_heads(dq, self.num_heads), _split_heads(dk, self.num_heads), _split_heads(dv, self.num_heads)
+    dq, dk = _normalize(dq, dim=-1), _normalize(dk, dim=-1)
+    attn_s = (dq @ dk.transpose((0, 1, 3, 2))) * self.temperatured
+    attn_s = nn.softmax(attn_s, dim=-1)
+    out_s = attn_s @ dv
+\end{lstlisting}
+\end{frame}
+
+\begin{frame}[fragile]{Attention\_SD}
+\begin{lstlisting}[style=pythoncode,basicstyle=\ttfamily\tiny]
+def execute(self, x, d):
+    ...
+    # 3. 空间 -> 频域；4. 频域 -> 空间
+    attn_s_f = _fft2(attn_s.float32())
+    out_s2f = _complex_abs(_ifft2(attn_s_f @ v))
+    out_f2s = attn_f @ dv
+
+    # 5. 恢复多头形状
+    out_f = _merge_heads(out_f, self.num_heads, h, w)
+    out_s = _merge_heads(out_s, self.num_heads, h, w)
+    out_s2f = _merge_heads(out_s2f, self.num_heads, h, w)
+    out_f2s = _merge_heads(out_f2s, self.num_heads, h, w)
+
+    # 6. FFT 局部增强分支
+    x_fft = _fft2(x.float32())
+    local_f = _complex_abs(_ifft2(
+        _complex_mul_real(x_fft, self.weight(_complex_real(x_fft)))))
+    out_s2f = self.project_outr(jt.concat((out_s2f, local_f), dim=1))
+
+    d_fft = _fft2(d.float32())
+    local_s = _complex_abs(_ifft2(
+        _complex_mul_real(d_fft, self.weightd(_complex_real(d_fft)))))
+    out_f2s = self.project_outd(jt.concat((out_f2s, local_s), dim=1))
+    # 7. 四路注意力拼接，对应 SFRM 输出
+    return self.project_out(jt.concat((out_s2f, out_f, out_f2s, out_s), dim=1))
+\end{lstlisting}
+\end{frame}
+
+\begin{frame}[fragile]{DWConv}
+\begin{lstlisting}[style=pythoncode,basicstyle=\ttfamily\tiny]
+class DWConv(nn.Module):
+    def __init__(self, dim):
+        super().__init__()
+        self.dim = dim // 4
+        # 多尺度 depth-wise conv：逐步扩大局部感受野
+        self.dw1 = nn.Conv2d(dim, self.dim, kernel_size=5, padding=2, groups=self.dim)
+        self.dw2 = nn.Conv2d(self.dim, self.dim, kernel_size=7, padding=3, groups=self.dim)
+        self.dw3 = nn.Conv2d(self.dim, self.dim, kernel_size=3, padding=1, groups=self.dim)
+        self.dw4 = nn.Conv2d(self.dim, self.dim, kernel_size=1)
+        # 拼接四个尺度后恢复到原通道数
+        self.conv_end = conv1x1_bn_relu(dim, dim)
+
+    def execute(self, x):
+        x1 = self.dw1(x)
+        x2 = self.dw2(x1) + x1
+        x3 = self.dw3(x2) + x2
+        x4 = self.dw4(x3) + x3
+        return self.conv_end(jt.concat((x1, x2, x3, x4), dim=1))
+\end{lstlisting}
+\end{frame}
+
+
+\begin{frame}[fragile]{PromptEncoder}
+\begin{lstlisting}[style=pythoncode,basicstyle=\ttfamily\tiny]
+class PromptEncoder(nn.Module):
+    def __init__(self, embed_dim, image_embedding_size,
+                 input_image_size, mask_in_chans, activation=nn.GELU):
+        super().__init__()
+        self.embed_dim = embed_dim
+        self.input_image_size = input_image_size
+        self.image_embedding_size = image_embedding_size
+
+        # 随机傅里叶位置编码；pe_layer 用于 SAM decoder 的 dense PE
+        self.pe_layer = PositionEmbeddingRandom(embed_dim // 2)
+        self.pe_layer_2 = PositionEmbeddingRandom(embed_dim // 8)
+
+        # 点/框 prompt 的 embedding；本项目主要使用 mask prompt
+        self.num_point_embeddings = 4
+        self.point_embeddings = nn.ModuleList([
+            nn.Embedding(1, embed_dim) for _ in range(self.num_point_embeddings)])
+        self.not_a_point_embed = nn.Embedding(1, embed_dim)
+
+        # 将 Decode 输出的粗 mask 下采样到 image embedding 尺度
+        self.mask_input_size = (4 * image_embedding_size[0],
+                                4 * image_embedding_size[1])
+        self.mask_downscaling = nn.Sequential(
+            nn.Conv2d(1, mask_in_chans // 4, kernel_size=2, stride=2),
+            LayerNorm2d(mask_in_chans // 4), activation(),
+            nn.Conv2d(mask_in_chans // 4, mask_in_chans, kernel_size=2, stride=2),
+            LayerNorm2d(mask_in_chans), activation(),
+            nn.Conv2d(mask_in_chans, embed_dim, kernel_size=1),
+        )
+        self.no_mask_embed = nn.Embedding(1, embed_dim)
+\end{lstlisting}
+\end{frame}
+
+\begin{frame}[fragile]{PromptEncoder}
+\begin{lstlisting}[style=pythoncode,basicstyle=\ttfamily\tiny]
+def execute(self, points, boxes, masks):
+    # 输出 sparse embeddings(points/boxes) 和 dense embeddings(mask)
+    bs = self._get_batch_size(points, boxes, masks)
+    sparse = jt.empty((bs, 0, self.embed_dim))
+
+    if points is not None:
+        coords, labels = points
+        point_embed = self._embed_points(coords, labels, pad=(boxes is None))
+        sparse = jt.concat([sparse, point_embed], dim=1)
+
+    if boxes is not None:
+        box_embed = self._embed_boxes(boxes)
+        sparse = jt.concat([sparse, box_embed], dim=1)
+
+    if masks is not None:
+        # DepthSAM 中 Decode 的 coarse mask 作为 mask prompt
+        masks = nn.interpolate(masks, self.mask_input_size, mode="bilinear")
+        dense = self.mask_downscaling(masks)
+    else:
+        # 没有 mask prompt 时使用可学习 no-mask embedding
+        dense = self.no_mask_embed.weight.reshape(1, -1, 1, 1).expand(
+            bs, -1, self.image_embedding_size[0], self.image_embedding_size[1])
+
+    return sparse, dense
+
+def get_dense_pe(self):
+    # SAM mask decoder 使用的 image positional encoding
+    return self.pe_layer(self.image_embedding_size).unsqueeze(0)
+\end{lstlisting}
+\end{frame}
+
+\begin{frame}[fragile]{PositionEmbeddingRandom}
+\begin{lstlisting}[style=pythoncode,basicstyle=\ttfamily\tiny]
+class PositionEmbeddingRandom(nn.Module):
+    def __init__(self, num_pos_feats=64, scale=1.0):
+        super().__init__()
+        # 随机高斯矩阵，将二维坐标映射到高频位置特征
+        self.register_buffer(
+            "positional_encoding_gaussian_matrix",
+            scale * jt.randn((2, num_pos_feats)),
+        )
+
+    def _pe_encoding(self, coords):
+        # coords 归一化到 [0,1] 后映射为 sin/cos 编码
+        coords = 2 * coords - 1
+        coords = coords @ self.positional_encoding_gaussian_matrix
+        coords = 2 * np.pi * coords
+        return jt.concat([jt.sin(coords), jt.cos(coords)], dim=-1)
+
+    def execute(self, size):
+        # 为 HxW image embedding 生成 dense positional encoding
+        h, w = size
+        grid = jt.ones((h, w), dtype=jt.float32)
+        y_embed = (grid.cumsum(dim=0) - 0.5) / h
+        x_embed = (grid.cumsum(dim=1) - 0.5) / w
+        pe = self._pe_encoding(jt.stack([x_embed, y_embed], dim=-1))
+        return pe.permute(2, 0, 1)
+
+    def forward_with_coords(self, coords, image_size):
+        # 点/框坐标先除以原图尺寸，再做同样的位置编码
+        coords = coords.clone()
+        coords[:, :, 0] = coords[:, :, 0] / image_size[1]
+        coords[:, :, 1] = coords[:, :, 1] / image_size[0]
+        return self._pe_encoding(coords.float32())
+\end{lstlisting}
+\end{frame}
+
+\begin{frame}[fragile]{MaskDecoder}
+\begin{lstlisting}[style=pythoncode,basicstyle=\ttfamily\tiny]
+class MaskDecoder(nn.Module):
+    def __init__(self, transformer_dim, transformer,
+                 num_multimask_outputs=3, activation=nn.GELU, ...):
+        super().__init__()
+        self.transformer_dim = transformer_dim
+        self.transformer = transformer
+
+        # iou token 预测 mask 质量；mask tokens 生成具体 mask
+        self.iou_token = nn.Embedding(1, transformer_dim)
+        self.num_mask_tokens = num_multimask_outputs + 1
+        self.mask_tokens = nn.Embedding(self.num_mask_tokens, transformer_dim)
+
+        # transformer 输出的 dense feature 上采样 4 倍
+        self.output_upscaling = nn.Sequential(
+            nn.ConvTranspose2d(transformer_dim, transformer_dim // 4, 2, 2),
+            LayerNorm2d(transformer_dim // 4), activation(),
+            nn.ConvTranspose2d(transformer_dim // 4, transformer_dim // 8, 2, 2),
+            activation(),
+        )
+
+        # 每个 mask token 对应一个 hypernetwork MLP
+        self.output_hypernetworks_mlps = nn.ModuleList([
+            MLP(transformer_dim, transformer_dim, transformer_dim // 8, 3)
+            for _ in range(self.num_mask_tokens)])
+        self.iou_prediction_head = MLP(transformer_dim, 256,
+                                       self.num_mask_tokens, 3)
+\end{lstlisting}
+\end{frame}
+
+\begin{frame}[fragile]{MaskDecoder}
+\[
+M = H_{mask}\cdot \operatorname{Up}(F_{img})
+\]
+\begin{lstlisting}[style=pythoncode,basicstyle=\ttfamily\tiny]
+def predict_masks(self, image_embeddings, image_pe,
+                  sparse_prompt_embeddings, dense_prompt_embeddings):
+    # 1. 拼接输出 token 与 sparse prompt token
+    output_tokens = jt.concat([self.iou_token.weight,
+                               self.mask_tokens.weight], dim=0)
+    output_tokens = output_tokens.unsqueeze(0).expand(
+        sparse_prompt_embeddings.size(0), -1, -1)
+    tokens = jt.concat((output_tokens, sparse_prompt_embeddings), dim=1)
+
+    # 2. dense prompt 直接加到 image embeddings 上
+    src = jt.repeat_interleave(image_embeddings, tokens.shape[0], dim=0)
+    src = src + dense_prompt_embeddings
+    pos_src = jt.repeat_interleave(image_pe, tokens.shape[0], dim=0)
+    b, c, h, w = src.shape
+
+    # 3. TwoWayTransformer 让 prompt tokens 与 image tokens 双向交互
+    hs, src = self.transformer(src, pos_src, tokens)
+    iou_token_out = hs[:, 0, :]
+    mask_tokens_out = hs[:, 1:(1 + self.num_mask_tokens), :]
+
+    # 4. hypernetwork 生成 mask 权重，与上采样 feature 相乘得到 mask
+    src = src.transpose(1, 2).view(b, c, h, w)
+    upscaled = self.output_upscaling(src)
+    hyper = jt.stack([self.output_hypernetworks_mlps[i](
+        mask_tokens_out[:, i, :]) for i in range(self.num_mask_tokens)], dim=1)
+    b, c, h, w = upscaled.shape
+    masks = (hyper @ upscaled.view(b, c, h * w)).view(b, -1, h, w)
+    iou_pred = self.iou_prediction_head(iou_token_out)
+    return masks, iou_pred
+\end{lstlisting}
+\end{frame}
+
+\begin{frame}[fragile]{TwoWayTransformer}
+\begin{lstlisting}[style=pythoncode,basicstyle=\ttfamily\tiny]
+class TwoWayTransformer(nn.Module):
+    def __init__(self, depth, embedding_dim, num_heads, mlp_dim,
+                 activation=nn.ReLU, attention_downsample_rate=2):
+        super().__init__()
+        self.layers = nn.ModuleList([
+            TwoWayAttentionBlock(
+                embedding_dim=embedding_dim,
+                num_heads=num_heads,
+                mlp_dim=mlp_dim,
+                activation=activation,
+                attention_downsample_rate=attention_downsample_rate,
+                skip_first_layer_pe=(i == 0),
+            )
+            for i in range(depth)
+        ])
+        self.final_attn_token_to_image = Attention(
+            embedding_dim, num_heads,
+            downsample_rate=attention_downsample_rate)
+        self.norm_final_attn = nn.LayerNorm(embedding_dim)
+
+    def execute(self, image_embedding, image_pe, point_embedding):
+        # BxCxHxW -> BxHWxC，将 dense image feature 展平为 token
+        bs, c, h, w = image_embedding.shape
+        image_embedding = image_embedding.flatten(2).permute(0, 2, 1)
+        image_pe = image_pe.flatten(2).permute(0, 2, 1)
+        queries, keys = point_embedding, image_embedding
+
+        for layer in self.layers:
+            queries, keys = layer(queries, keys, point_embedding, image_pe)
+\end{lstlisting}
+\end{frame}
+
+\begin{frame}[fragile]{TwoWayTransformer}
+\begin{lstlisting}[style=pythoncode,basicstyle=\ttfamily\tiny]
+def execute(self, image_embedding, image_pe, point_embedding):
+    ...
+    # 最后再做一次 token -> image attention
+    q = queries + point_embedding
+    k = keys + image_pe
+    attn_out = self.final_attn_token_to_image(q=q, k=k, v=keys)
+    queries = self.norm_final_attn(queries + attn_out)
+    return queries, keys
+
+class TwoWayAttentionBlock(nn.Module):
+    def execute(self, queries, keys, query_pe, key_pe):
+        # 1. prompt tokens 自注意力
+        q = queries if self.skip_first_layer_pe else queries + query_pe
+        queries = self.norm1(queries + self.self_attn(q=q, k=q, v=queries))
+
+        # 2. prompt tokens attend to image tokens
+        q, k = queries + query_pe, keys + key_pe
+        queries = self.norm2(
+            queries + self.cross_attn_token_to_image(q=q, k=k, v=keys))
+
+        # 3. prompt tokens MLP
+        queries = self.norm3(queries + self.mlp(queries))
+
+        # 4. image tokens attend back to prompt tokens
+        q, k = queries + query_pe, keys + key_pe
+        keys = self.norm4(
+            keys + self.cross_attn_image_to_token(q=k, k=q, v=queries))
+        return queries, keys
+\end{lstlisting}
+\end{frame}
+
+\begin{frame}[fragile]{Attention}
+\[
+\operatorname{Attention}(Q,K,V)=\operatorname{Softmax}\left(\frac{QK^T}{\sqrt{d}}\right)V
+\]
+\begin{lstlisting}[style=pythoncode,basicstyle=\ttfamily\tiny]
+class Attention(nn.Module):
+    def __init__(self, embedding_dim, num_heads, downsample_rate=1):
+        super().__init__()
+        self.internal_dim = embedding_dim // downsample_rate
+        self.num_heads = num_heads
+        self.q_proj = nn.Linear(embedding_dim, self.internal_dim)
+        self.k_proj = nn.Linear(embedding_dim, self.internal_dim)
+        self.v_proj = nn.Linear(embedding_dim, self.internal_dim)
+        self.out_proj = nn.Linear(self.internal_dim, embedding_dim)
+
+    def _separate_heads(self, x, num_heads):
+        b, n, c = x.shape
+        x = x.reshape(b, n, num_heads, c // num_heads)
+        return x.transpose(1, 2)
+
+    def execute(self, q, k, v):
+        q, k, v = self.q_proj(q), self.k_proj(k), self.v_proj(v)
+        q = self._separate_heads(q, self.num_heads)
+        k = self._separate_heads(k, self.num_heads)
+        v = self._separate_heads(v, self.num_heads)
+        _, _, _, c_per_head = q.shape
+        attn = (q @ k.permute(0, 1, 3, 2)) / math.sqrt(c_per_head)
+        out = nn.softmax(attn, dim=-1) @ v
+        out = self._recombine_heads(out)
+        return self.out_proj(out)
+\end{lstlisting}
+\end{frame}
+
+
+
+
+\begin{frame}{训练目标}
+  \small
+  训练阶段保留 COD 分割常用的结构损失，并叠加 SMEA 的专家负载均衡辅助项：
+
+  \vspace{0.5em}
+  \[
+    \mathcal{L}
+    =
+    \mathcal{L}_{wBCE}
+    +
+    \mathcal{L}_{wIoU}
+    +
+    \alpha N \sum_{i=1}^{N} f_i P_i
+  \]
+
+  \vspace{0.5em}
+  \begin{itemize}
+    \item $\mathcal{L}_{wBCE}$：边界加权 BCE，用于像素级前景/背景监督。
+    \item $\mathcal{L}_{wIoU}$：边界加权 IoU，用于优化整体区域重叠。
+    \item $\alpha N \sum_i f_iP_i$：MoE load-balance loss，避免 token 长期集中到少数 experts。
+  \end{itemize}
+\end{frame}
+
+\begin{frame}[fragile]{Structure Loss}
+\begin{lstlisting}[style=pythoncode,basicstyle=\ttfamily\tiny]
+def structure_loss(pred, mask, eps=1e-8):
+    # 1. 边界权重：mask 与局部平均差异越大，权重越高
+    weit = 1 + 5 * jt.abs(
+        nn.avg_pool2d(mask, kernel_size=31, stride=1, padding=15) - mask)
+
+    # 2. stable BCE with logits，避免 exp 溢出导致 NaN
+    max_val = jt.clamp(-pred, min_v=0)
+    log_term = max_val + ((-max_val).exp() + (-pred - max_val).exp()).log()
+    wbce = (1 - mask) * pred + log_term
+    wbce = jt.sum(weit * wbce, dims=[2, 3]) / (jt.sum(weit, dims=[2, 3]) + eps)
+
+    # 3. weighted IoU：同样使用边界权重
+    pred = jt.sigmoid(pred)
+    inter = jt.sum((pred * mask) * weit, dims=[2, 3])
+    union = jt.sum((pred + mask) * weit, dims=[2, 3])
+    wiou = 1 - (inter + 1) / (union - inter + 1 + eps)
+
+    return (wbce + wiou).mean()
+\end{lstlisting}
+\end{frame}
+
+\begin{frame}[fragile]{MoE Aux Loss}
+\begin{lstlisting}[style=pythoncode,basicstyle=\ttfamily\tiny]
+# 每个 MOEAdapter 在 execute 中记录当前层的 load-balance loss
+prob = jt.mean(gate_weights, dims=[0])             # P_i: 平均门控概率
+mask = routing_weights > 0                         # token 是否路由到 expert i
+frac = jt.sum(mask.float32(), dims=[0]) / (B * N + 1e-8)  # f_i
+self.current_aux_loss = jt.sum(prob * frac) * self.num_experts
+
+class MOELossCollector:
+    def __init__(self, alpha=0.01):
+        self.alpha = alpha
+
+    def get_total_loss(self, model):
+        # 汇总所有 SMEA / MOEAdapter 层的辅助损失
+        total = None
+        for module in model.image_encoder.pretrained.blocks:
+            if isinstance(module, MOEAdapter):
+                aux = module.current_aux_loss
+                total = aux if total is None else total + aux
+        return jt.array(0.0) if total is None else total * self.alpha
+
+# train.py 中最终优化目标
+loss_main = structure_loss(pred, gt)
+loss_aux = moe_loss_collector.get_total_loss(generator)
+loss = loss_main + loss_aux
+optimizer.step(loss)
+\end{lstlisting}
+\end{frame}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% 3. Results
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{实验结果展示与分析}
+
+\begin{frame}{训练配置}
+  \small
+  \renewcommand{\arraystretch}{1.2}
+  \begin{tabular}{p{0.34\textwidth} p{0.48\textwidth}}
+    \toprule
+    项目 & 配置 \\
+    \midrule
+    输入尺寸 & \texttt{trainsize=384} \\
+    Jittor batch size & 待填 \\
+    PyTorch batch size & \texttt{batchsize=4} \\
+    PyTorch训练 epoch & 120 \\
+    optimizer & Adam \\
+    learning rate & \texttt{5e-5} \\
+    checkpoint格式 & Jittor: \texttt{npz}; PyTorch: \texttt{pth} \\
+    测试数据集 & CAMO / COD10K / NC4K / CHAMELEON \\
+    \bottomrule
+  \end{tabular}
+\end{frame}
+
+\begin{frame}{PyTorch训练Loss曲线}
+  \begin{center}
+    \includegraphics[width=0.86\textwidth]{image/torch/torch_loss_curve.png}
+  \end{center}
+
+  \vspace{0.3em}
+  \small
+  两段训练日志已按 \texttt{epoch, step} 合并并去重；Jittor 结果完成后将在同页补充对齐曲线。
+\end{frame}
+
+\begin{frame}{PyTorch定量结果：MAE}
+  \centering
+  \small
+  \input{image/torch/torch_mae_table.tex}
+
+  \vspace{0.8em}
+  \begin{itemize}
+    \item 权重：\texttt{Model\_120\_gen.pth}。
+    \item 输出：四个数据集的 prediction map 与可视化 panel 已保存。
+    \item Jittor 完整测试完成后，将在右侧补充 Jittor MAE 与差值。
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{MAE对齐表占位}
+  \small
+  \renewcommand{\arraystretch}{1.2}
+  \begin{tabular}{p{0.22\textwidth} c c c}
+    \toprule
+    Dataset & PyTorch & Jittor & Gap \\
+    \midrule
+    CAMO & 0.02999 & 待填 & 待填 \\
+    CHAMELEON & 0.01876 & 待填 & 待填 \\
+    COD10K & 0.01598 & 待填 & 待填 \\
+    NC4K & 0.02238 & 待填 & 待填 \\
+    \bottomrule
+  \end{tabular}
+
+  \vspace{1.0em}
+  \begin{itemize}
+    \item PyTorch列来自 \texttt{runs/torch/runs/*\_torch\_test/test\_results.json}。
+    \item Jittor列等待最终 checkpoint 测试完成后补充。
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{PyTorch定性结果：CAMO / CHAMELEON}
+  \begin{center}
+    \begin{columns}[T,totalwidth=0.94\textwidth]
+      \begin{column}{0.48\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{image/torch/torch_CAMO_panels.png}
+        \vspace{0.2em}
+        {\scriptsize CAMO}
+      \end{column}
+      \begin{column}{0.48\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{image/torch/torch_CHAMELEON_panels.png}
+        \vspace{0.2em}
+        {\scriptsize CHAMELEON}
+      \end{column}
+    \end{columns}
+  \end{center}
+\end{frame}
+
+\begin{frame}{PyTorch定性结果：COD10K / NC4K}
+  \begin{center}
+    \begin{columns}[T,totalwidth=0.94\textwidth]
+      \begin{column}{0.48\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{image/torch/torch_COD10K_panels.png}
+        \vspace{0.2em}
+        {\scriptsize COD10K}
+      \end{column}
+      \begin{column}{0.48\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{image/torch/torch_NC4K_panels.png}
+        \vspace{0.2em}
+        {\scriptsize NC4K}
+      \end{column}
+    \end{columns}
+  \end{center}
+\end{frame}
+
+\begin{frame}{PyTorch性能：FPS与显存}
+  \centering
+  \scriptsize
+  \input{image/torch/torch_benchmark_table.tex}
+
+  \vspace{0.6em}
+  \includegraphics[width=0.72\textwidth]{image/torch/torch_fps_benchmark.png}
+\end{frame}
+
+\begin{frame}{性能对齐表占位}
+  \small
+  \renewcommand{\arraystretch}{1.2}
+  \begin{tabular}{p{0.20\textwidth} p{0.16\textwidth} c c c}
+    \toprule
+    Framework & Mode & Batch & FPS & Memory \\
+    \midrule
+    PyTorch & forward & 1 & 5.53 & 2511.99MB \\
+    PyTorch & train & 1 & 1.42 & 7063.09MB \\
+    PyTorch & train & 4 & 3.81 & 22851.36MB \\
+    Jittor & forward & 1 & 待填 & 待填 \\
+    Jittor & train & 1 & 待填 & 待填 \\
+    Jittor & train & 2 & 待填 & 待填 \\
+    \bottomrule
+  \end{tabular}
+
+  \vspace{0.8em}
+  \small
+  FPS 由 \texttt{tests/test\_benchmark\_*\_fps.py} 记录，训练日志中同时记录 GPU memory / utilization。
+\end{frame}
+
+% %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% % 4. Differences
+% %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% \section{差异说明}
+
+% \begin{frame}{与PyTorch版本的主要差异}
+%   \small
+%   \begin{itemize}
+%     \item 框架差异：PyTorch 动态图迁移到 Jittor，需要处理 \texttt{jt.Var}、\texttt{nn.Module}、优化器和 Dataset API 差异。
+%     \item 权重格式：Jittor 版本使用 \texttt{npz} 保存和加载，避免依赖 PyTorch 环境。
+%     \item MoE routing：当前 Jittor 版本实现 top-k routing 语义，同时采用更稳定的 expert 聚合方式。
+%     \item GSFM优化：最高分辨率 \texttt{fm1} 使用轻量路径，该部分单独解释其性能和显存收益。
+%     \item Eval模式：Jittor 端曾在 eval 分支出现 NaN，因此测试链路保持与训练可运行分支一致。
+%   \end{itemize}
+% \end{frame}
+
+% \begin{frame}{Jittor迁移中的关键问题}
+%   \small
+%   \begin{itemize}
+%     \item FFT / iFFT：\texttt{Attention\_SD} 依赖 \texttt{ComplexNumber.fft2()}，显存和编译稳定性是主要难点。
+%     \item Shape对齐：PromptEncoder 的 dense embedding 尺寸需要根据当前 encoder feature 动态设置。
+%     \item 保存格式：\texttt{jt.save(...pth)} 会隐式依赖 PyTorch，因此改为 \texttt{np.savez}。
+%     \item 显存控制：引入 \texttt{sync\_gc()}、checkpoint清理、Jittor memory profiler 和轻量路径。
+%     \item 日志对齐：使用统一 monitor 记录训练过程、评估、可视化和性能。
+%   \end{itemize}
+% \end{frame}
+
+% \begin{frame}{资源受限下的实验策略}
+%   \small
+%   \begin{itemize}
+%     \item 原论文使用多卡训练，单卡复现需要在 epoch、batch size、输入尺寸上做折中。
+%     \item 优先保证端到端链路完整：训练、保存、测试、可视化、日志。
+%     \item 若完整数据训练时间不足，则使用相同数据子集做 PyTorch / Jittor 对齐。
+%     \item 报告中明确标注工程设置：输入尺寸、batch size、epoch、专家数、是否使用轻量路径。
+%   \end{itemize}
+% \end{frame}
+
+% %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% % 5. Reflection
+% %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% \section{Jittor使用感想}
+
+% \begin{frame}{Jittor复现体会}
+%   \small
+%   \begin{itemize}
+%     \item 优点：Python接口接近 PyTorch，基本模块迁移成本相对可控。
+%     \item 难点：复杂算子、复数 FFT、动态路由、显存回收和调试工具链需要额外处理。
+%     \item 经验：先做模块级 shape 测试，再打通端到端训练，比直接迁移完整模型更稳。
+%     \item 对齐方式：不能只看 loss，需要同时记录 FPS、显存、MAE 和可视化结果。
+%   \end{itemize}
+% \end{frame}
+
+% \begin{frame}{后续工作}
+%   \small
+%   \begin{itemize}
+%     \item 补充最终 PyTorch / Jittor 在四个测试集上的 MAE 表格。
+%     \item 补充典型样例的可视化对比图。
+%     \item 在资源允许时测试更多 experts 设置，分析 MoE routing 对性能的影响。
+%     \item 尝试进一步优化 \texttt{Attention\_SD} 中 FFT 路径的显存和速度。
+%   \end{itemize}
+
+%   \vspace{1.0em}
+%   \begin{center}
+%     \large 谢谢！
+%   \end{center}
+% \end{frame}
+
 \end{document}
+
+
+
